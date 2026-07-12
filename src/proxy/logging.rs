@@ -2,9 +2,6 @@ use base64::Engine as _;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/// Maximum characters to log for request / response bodies before truncation.
-const MAX_LOGGED_BODY_CHARS: usize = 200_000;
-
 // ── Log entry ────────────────────────────────────────────────────────────────
 
 /// Structured log entry.
@@ -38,17 +35,9 @@ pub fn snapshot_request(
     url: &str,
     headers: &std::collections::HashMap<String, String>,
     body: Option<&[u8]>,
+    body_max_bytes: usize,
 ) -> serde_json::Value {
-    let redacted: std::collections::HashMap<&str, &str> = headers
-        .iter()
-        .map(|(k, v)| {
-            let is_sensitive = super::client::SENSITIVE_REQUEST_HEADERS
-                .iter()
-                .any(|h| k.to_lowercase() == h.to_lowercase());
-            let val: &str = if is_sensitive { "***REDACTED***" } else { v };
-            (k.as_str(), val)
-        })
-        .collect();
+    let redacted = redact_headers(headers);
 
     let mut obj = serde_json::json!({
         "method": method,
@@ -57,7 +46,7 @@ pub fn snapshot_request(
     });
 
     if let Some(b) = body {
-        obj["body"] = truncate_body(b);
+        obj["body"] = truncate_body(b, body_max_bytes);
     }
 
     obj
@@ -68,14 +57,17 @@ pub fn snapshot_response(
     status: u16,
     headers: &std::collections::HashMap<String, String>,
     body: Option<&[u8]>,
+    body_max_bytes: usize,
 ) -> serde_json::Value {
+    let redacted = redact_headers(headers);
     let mut obj = serde_json::json!({
+        "status_code": status,
         "status": status,
-        "headers": headers,
+        "headers": redacted,
     });
 
     if let Some(b) = body {
-        obj["body"] = truncate_body(b);
+        obj["body"] = truncate_body(b, body_max_bytes);
     }
 
     obj
@@ -89,26 +81,117 @@ fn redact_header_value(_value: &str) -> String {
     "***REDACTED***".to_string()
 }
 
-/// Truncate body: if text > MAX_LOGGED_BODY_CHARS, base64-encode and truncate.
-fn truncate_body(body: &[u8]) -> serde_json::Value {
-    // Try UTF-8 text first
+/// Truncate body into a frontend-friendly object:
+/// - text UTF-8: `{ text, byte_length }`
+/// - binary / oversized: `{ base64|base64_truncated, encoding, byte_length, truncated? }`
+fn redact_headers(
+    headers: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<&str, &str> {
+    headers
+        .iter()
+        .map(|(k, v)| {
+            let sensitive = super::client::LOG_REDACTED_HEADERS
+                .iter()
+                .any(|header| k.eq_ignore_ascii_case(header));
+            (k.as_str(), if sensitive { "***REDACTED***" } else { v })
+        })
+        .collect()
+}
+
+fn truncate_body(body: &[u8], budget: usize) -> serde_json::Value {
+    if budget == 0 {
+        return serde_json::json!({ "cleared": true, "byte_length": body.len() });
+    }
+    if body.is_empty() {
+        return serde_json::json!({
+            "text": "",
+            "byte_length": 0,
+        });
+    }
+
+    // Text is cut on a UTF-8 boundary. Binary bytes are sliced before encoding.
     if let Ok(text) = std::str::from_utf8(body) {
-        if text.len() <= MAX_LOGGED_BODY_CHARS {
-            return serde_json::Value::String(text.to_string());
+        let mut cutoff = body.len().min(budget);
+        while cutoff > 0 && !text.is_char_boundary(cutoff) {
+            cutoff -= 1;
         }
-        // Too long → base64 + truncate
+        let mut snapshot =
+            serde_json::json!({ "text": &text[..cutoff], "byte_length": body.len() });
+        if cutoff < body.len() {
+            snapshot["truncated"] = serde_json::Value::Bool(true);
+        }
+        return snapshot;
     }
 
-    // Fallback: base64
-    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, body);
-    if encoded.len() <= MAX_LOGGED_BODY_CHARS {
-        return serde_json::json!({ "base64": encoded, "size": body.len() });
+    let slice = &body[..body.len().min(budget)];
+    let mut snapshot = serde_json::json!({
+        "base64": base64::engine::general_purpose::STANDARD.encode(slice),
+        "encoding": "base64",
+        "byte_length": body.len(),
+    });
+    if slice.len() < body.len() {
+        snapshot["truncated"] = serde_json::Value::Bool(true);
+    }
+    snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{snapshot_request, snapshot_response, truncate_body};
+
+    #[test]
+    fn request_and_response_snapshots_redact_mixed_case_sensitive_headers() {
+        let headers = HashMap::from([
+            ("aUtHoRiZaTiOn".to_string(), "Bearer secret".to_string()),
+            ("sEt-CoOkIe".to_string(), "session=secret".to_string()),
+            ("X-aCcEsS-tOkEn".to_string(), "access-secret".to_string()),
+            (
+                "PrOxY-aUtHoRiZaTiOn".to_string(),
+                "proxy-secret".to_string(),
+            ),
+            ("X-Request-Id".to_string(), "request-123".to_string()),
+        ]);
+
+        for snapshot in [
+            snapshot_request("GET", "https://example.test", &headers, None, 1024),
+            snapshot_response(200, &headers, None, 1024),
+        ] {
+            let snapshot_headers = &snapshot["headers"];
+            assert_eq!(snapshot_headers["aUtHoRiZaTiOn"], "***REDACTED***");
+            assert_eq!(snapshot_headers["sEt-CoOkIe"], "***REDACTED***");
+            assert_eq!(snapshot_headers["X-aCcEsS-tOkEn"], "***REDACTED***");
+            assert_eq!(snapshot_headers["PrOxY-aUtHoRiZaTiOn"], "***REDACTED***");
+            assert_eq!(snapshot_headers["X-Request-Id"], "request-123");
+        }
     }
 
-    serde_json::json!({
-        "base64_truncated": &encoded[..MAX_LOGGED_BODY_CHARS],
-        "size": body.len(),
-    })
+    #[test]
+    fn text_is_truncated_at_utf8_boundary() {
+        let body = "aéz".as_bytes();
+        let value = truncate_body(body, 2);
+        assert_eq!(value["text"], "a");
+        assert_eq!(value["byte_length"], 4);
+        assert_eq!(value["truncated"], true);
+    }
+
+    #[test]
+    fn binary_is_sliced_before_base64_encoding() {
+        let value = truncate_body(&[0xff, 1, 2, 3], 2);
+        assert_eq!(value["base64"], "/wE=");
+        assert_eq!(value["byte_length"], 4);
+        assert_eq!(value["truncated"], true);
+    }
+
+    #[test]
+    fn zero_budget_clears_body_only() {
+        let value = truncate_body(b"body", 0);
+        assert_eq!(
+            value,
+            serde_json::json!({"cleared": true, "byte_length": 4})
+        );
+    }
 }
 
 // ── Async log writer ────────────────────────────────────────────────────────
@@ -184,15 +267,21 @@ async fn insert_log_entry(
 // ── Background cleanup ──────────────────────────────────────────────────────
 
 /// Background task that periodically cleans old log bodies and deletes stale logs.
-pub async fn cleanup_loop(pool: sqlx::SqlitePool) {
+pub async fn cleanup_loop(
+    pool: sqlx::SqlitePool,
+    runtime_settings: std::sync::Arc<tokio::sync::RwLock<crate::models::settings::RuntimeSettings>>,
+) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
 
-        if let Err(e) = crate::db::log::clear_old_log_bodies(&pool).await {
+        let settings = runtime_settings.read().await.clone();
+        if let Err(e) =
+            crate::db::log::clear_old_log_bodies(&pool, settings.log_body_keep_count).await
+        {
             tracing::error!("clear_old_log_bodies failed: {:?}", e);
         }
 
-        if let Err(e) = crate::db::log::delete_old_logs(&pool).await {
+        if let Err(e) = crate::db::log::delete_old_logs(&pool, settings.log_retention_days).await {
             tracing::error!("delete_old_logs failed: {:?}", e);
         }
     }

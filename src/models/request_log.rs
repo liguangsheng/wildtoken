@@ -59,6 +59,21 @@ pub struct RequestLogDetailOut {
 pub struct RequestLogPage {
     pub items: Vec<RequestLogOut>,
     pub has_more: bool,
+    pub recent_rpm: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsageWindowOut {
+    pub total_tokens: i64,
+    pub request_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsageStatsOut {
+    pub today: TokenUsageWindowOut,
+    pub one_day: TokenUsageWindowOut,
+    pub seven_days: TokenUsageWindowOut,
+    pub thirty_days: TokenUsageWindowOut,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

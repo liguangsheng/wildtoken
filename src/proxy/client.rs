@@ -24,14 +24,19 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "x-wildtoken-upstream",
 ];
 
-/// Headers whose values should be redacted in logs.
-pub const SENSITIVE_REQUEST_HEADERS: &[&str] = &[
+/// Headers whose values should be redacted in logging context.
+pub const LOG_REDACTED_HEADERS: &[&str] = &[
     "authorization",
     "x-api-key",
     "cookie",
     "set-cookie",
     "proxy-authorization",
+    "proxy-authenticate",
     "x-admin-token",
+    "x-auth-token",
+    "x-access-token",
+    "x-goog-api-key",
+    "x-amz-security-token",
 ];
 
 // ── URL building ─────────────────────────────────────────────────────────────
@@ -115,6 +120,9 @@ fn non_empty_str(value: &serde_json::Value) -> bool {
 }
 
 /// Whether a parsed SSE JSON payload contains the first visible generation token.
+///
+/// Counts text deltas and the first non-empty tool-call delta (common when the
+/// model streams only function calls without content/reasoning text).
 fn json_has_visible_token(obj: &serde_json::Value) -> bool {
     if let Some(choices) = obj.get("choices").and_then(|v| v.as_array()) {
         for choice in choices {
@@ -126,22 +134,34 @@ fn json_has_visible_token(obj: &serde_json::Value) -> bool {
             {
                 return true;
             }
+            // Pure tool-call streams have no text content; treat first tool_calls
+            // chunk as TTFT so agent/tool turns are not left blank in the UI.
+            if delta["tool_calls"]
+                .as_array()
+                .is_some_and(|arr| !arr.is_empty())
+            {
+                return true;
+            }
             if non_empty_str(&choice["text"]) || non_empty_str(&choice["message"]["content"]) {
+                return true;
+            }
+            if choice["message"]["tool_calls"]
+                .as_array()
+                .is_some_and(|arr| !arr.is_empty())
+            {
                 return true;
             }
         }
     }
 
     // OpenAI Responses API streaming events.
-    if obj
-        .get("type")
-        .and_then(|v| v.as_str())
-        .is_some_and(|t| {
-            t == "response.output_text.delta"
-                || t == "response.reasoning_text.delta"
-                || t == "response.reasoning_summary_text.delta"
-        })
-        && non_empty_str(&obj["delta"])
+    if obj.get("type").and_then(|v| v.as_str()).is_some_and(|t| {
+        t == "response.output_text.delta"
+            || t == "response.reasoning_text.delta"
+            || t == "response.reasoning_summary_text.delta"
+            || t == "response.function_call_arguments.delta"
+    }) && (non_empty_str(&obj["delta"])
+        || obj["delta"].as_object().is_some_and(|m| !m.is_empty()))
     {
         return true;
     }
@@ -177,6 +197,25 @@ fn sse_line_has_visible_token(line: &str) -> bool {
 /// Extract token usage from either SSE stream body or JSON body.
 ///
 /// Returns `(prompt_tokens, completion_tokens, total_tokens)`.
+fn extract_usage_values(usage: &serde_json::Value) -> (Option<i32>, Option<i32>, Option<i32>) {
+    let prompt = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32);
+    let completion = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32);
+    let total = usage
+        .get("total_tokens")
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32);
+
+    (prompt, completion, total)
+}
+
 pub fn extract_usage(
     raw_body: &[u8],
     content_type: &str,
@@ -197,21 +236,11 @@ pub fn extract_usage(
                     continue;
                 }
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(u) = obj.get("usage") {
-                        prompt = u
-                            .get("prompt_tokens")
-                            .or_else(|| u.get("input_tokens"))
-                            .and_then(|v| v.as_i64())
-                            .map(|v| v as i32);
-                        completion = u
-                            .get("completion_tokens")
-                            .or_else(|| u.get("output_tokens"))
-                            .and_then(|v| v.as_i64())
-                            .map(|v| v as i32);
-                        total = u
-                            .get("total_tokens")
-                            .and_then(|v| v.as_i64())
-                            .map(|v| v as i32);
+                    if let Some(usage) = obj.get("usage").or_else(|| {
+                        obj.get("response")
+                            .and_then(|response| response.get("usage"))
+                    }) {
+                        (prompt, completion, total) = extract_usage_values(usage);
                     }
                 }
             }
@@ -220,22 +249,11 @@ pub fn extract_usage(
     }
 
     if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
-        if let Some(u) = obj.get("usage") {
-            let prompt = u
-                .get("prompt_tokens")
-                .or_else(|| u.get("input_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
-            let completion = u
-                .get("completion_tokens")
-                .or_else(|| u.get("output_tokens"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
-            let total = u
-                .get("total_tokens")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
-            return (prompt, completion, total);
+        if let Some(usage) = obj.get("usage").or_else(|| {
+            obj.get("response")
+                .and_then(|response| response.get("usage"))
+        }) {
+            return extract_usage_values(usage);
         }
     }
 
@@ -277,6 +295,67 @@ fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
     }
 
     None
+}
+
+/// Prepare a JSON request body for its selected upstream.
+///
+/// Streaming Chat Completions responses omit usage by default on many
+/// OpenAI-compatible upstreams. Request it explicitly so the gateway can
+/// consistently record prompt, completion, and total token counts.
+pub(crate) fn prepare_upstream_body(
+    body: &[u8],
+    forward_model: Option<&str>,
+    path: &str,
+) -> Vec<u8> {
+    let Ok(mut request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return body.to_vec();
+    };
+    let Some(request_obj) = request.as_object_mut() else {
+        return body.to_vec();
+    };
+
+    let mut changed = false;
+
+    if let Some(model) = forward_model {
+        if request_obj
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|current| current != model)
+        {
+            request_obj.insert("model".into(), serde_json::Value::String(model.to_string()));
+            changed = true;
+        }
+    }
+
+    if path.trim_matches('/') == "chat/completions"
+        && request_obj
+            .get("stream")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    {
+        let stream_options = request_obj
+            .entry("stream_options")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+
+        if !stream_options.is_object() {
+            *stream_options = serde_json::Value::Object(serde_json::Map::new());
+            changed = true;
+        }
+
+        let stream_options = stream_options
+            .as_object_mut()
+            .expect("stream_options was normalized to an object");
+        if stream_options.get("include_usage") != Some(&serde_json::Value::Bool(true)) {
+            stream_options.insert("include_usage".into(), serde_json::Value::Bool(true));
+            changed = true;
+        }
+    }
+
+    if changed {
+        serde_json::to_vec(&request).unwrap_or_else(|_| body.to_vec())
+    } else {
+        body.to_vec()
+    }
 }
 
 /// Read the full upstream body while recording true TTFT for SSE streams.
@@ -333,33 +412,21 @@ pub async fn proxy_request(
     let reasoning_effort = extract_reasoning_effort(body);
 
     let url = build_upstream_url(upstream, path, query_params);
-    let mut fwd_headers = build_forward_headers(downstream_headers, upstream);
+    let fwd_headers = build_forward_headers(downstream_headers, upstream);
+    let log_body_max_bytes = state.runtime_settings.read().await.log_body_max_bytes as usize;
 
-    let downstream_snap = logging::snapshot_request(method, &url, &fwd_headers, Some(body));
+    let downstream_snap =
+        logging::snapshot_request(method, &url, &fwd_headers, Some(body), log_body_max_bytes);
 
-    // Rewrite model field when mapping applies.
-    let upstream_body = if let Some(fmodel) = forward_model {
-        if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(body) {
-            if let Some(existing) = json.get("model").and_then(|v| v.as_str()) {
-                if existing != fmodel {
-                    json["model"] = serde_json::Value::String(fmodel.to_string());
-                    fwd_headers.remove("content-length");
-                    serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec())
-                } else {
-                    body.to_vec()
-                }
-            } else {
-                body.to_vec()
-            }
-        } else {
-            body.to_vec()
-        }
-    } else {
-        body.to_vec()
-    };
+    let upstream_body = prepare_upstream_body(body, forward_model, path);
 
-    let upstream_snap =
-        logging::snapshot_request(method, &url, &fwd_headers, Some(&upstream_body));
+    let upstream_snap = logging::snapshot_request(
+        method,
+        &url,
+        &fwd_headers,
+        Some(&upstream_body),
+        log_body_max_bytes,
+    );
 
     let mut req_builder = state.http_client.request(
         reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::POST),
@@ -467,8 +534,12 @@ pub async fn proxy_request(
         backoff.record_failure(upstream.id);
     }
 
-    let upstream_resp_snap =
-        logging::snapshot_response(status_u16, &resp_headers, Some(&body_bytes));
+    let upstream_resp_snap = logging::snapshot_response(
+        status_u16,
+        &resp_headers,
+        Some(&body_bytes),
+        log_body_max_bytes,
+    );
 
     let (prompt_tokens, completion_tokens, total_tokens) =
         extract_usage(&body_bytes, &content_type);
@@ -478,9 +549,8 @@ pub async fn proxy_request(
 
     // Prefer true stream TTFT; fall back to buffered detection only for stream bodies.
     let first_token_ms = if is_stream {
-        streamed_first_token_ms.or_else(|| {
-            extract_first_token_ms(&body_bytes).map(|_| elapsed.as_millis() as i32)
-        })
+        streamed_first_token_ms
+            .or_else(|| extract_first_token_ms(&body_bytes).map(|_| elapsed.as_millis() as i32))
     } else {
         None
     };
@@ -508,4 +578,54 @@ pub async fn proxy_request(
     logging::schedule_log(&state.db, log_entry);
 
     Ok((status, resp_headers, body_bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_usage, prepare_upstream_body};
+    use serde_json::json;
+
+    #[test]
+    fn streaming_chat_request_includes_usage_and_preserves_options() {
+        let body = json!({
+            "model": "requested-model",
+            "stream": true,
+            "stream_options": {"include_obfuscation": true}
+        });
+
+        let prepared = prepare_upstream_body(
+            &serde_json::to_vec(&body).unwrap(),
+            Some("upstream-model"),
+            "chat/completions",
+        );
+        let prepared: serde_json::Value = serde_json::from_slice(&prepared).unwrap();
+
+        assert_eq!(prepared["model"], "upstream-model");
+        assert_eq!(prepared["stream_options"]["include_usage"], true);
+        assert_eq!(prepared["stream_options"]["include_obfuscation"], true);
+    }
+
+    #[test]
+    fn usage_option_is_not_added_to_other_or_non_streaming_requests() {
+        for (path, body) in [
+            ("chat/completions", json!({"model": "m", "stream": false})),
+            ("responses", json!({"model": "m", "stream": true})),
+        ] {
+            let prepared = prepare_upstream_body(&serde_json::to_vec(&body).unwrap(), None, path);
+            let prepared: serde_json::Value = serde_json::from_slice(&prepared).unwrap();
+            assert!(prepared.get("stream_options").is_none());
+        }
+    }
+
+    #[test]
+    fn extracts_usage_from_codex_responses_completion_event() {
+        let response = br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":99424,"output_tokens":440,"total_tokens":99864}}}
+
+"#;
+
+        assert_eq!(
+            extract_usage(response, "text/event-stream"),
+            (Some(99424), Some(440), Some(99864))
+        );
+    }
 }

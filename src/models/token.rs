@@ -8,7 +8,7 @@ pub struct ApiTokenRow {
     pub name: String,
     pub description: String,
     pub token: String,
-    pub enabled: i64,      // 0 / 1
+    pub enabled: i64, // 0 / 1
     pub created_at: String,
     pub updated_at: String,
 }

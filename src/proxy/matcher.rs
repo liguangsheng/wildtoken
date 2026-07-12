@@ -95,9 +95,9 @@ pub fn model_match_score(upstream: &UpstreamRow, model: Option<&str>) -> i32 {
     let req = normalize_model_match(model);
 
     // 4: exact match in model_mappings
-    if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-        &upstream.model_mappings,
-    ) {
+    if let Ok(map) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&upstream.model_mappings)
+    {
         for key in map.keys() {
             if normalize_model_match(key) == req {
                 return 4;
@@ -137,7 +137,7 @@ pub fn model_match_score(upstream: &UpstreamRow, model: Option<&str>) -> i32 {
 
 /// Check whether the upstream supports the given model.
 pub fn match_model(upstream: &UpstreamRow, model: Option<&str>) -> bool {
-    model_match_score(upstream, model) > 0
+    model.is_none_or(|model| model_match_score(upstream, Some(model)) > 0)
 }
 
 /// Select the forward model name.
@@ -154,9 +154,9 @@ pub fn select_forward_model(
     let req = normalize_model_match(model);
 
     // 1. check mappings
-    if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-        &upstream.model_mappings,
-    ) {
+    if let Ok(map) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&upstream.model_mappings)
+    {
         for (key, val) in map.iter() {
             if normalize_model_match(key) == req {
                 // prefer the string value
@@ -190,8 +190,8 @@ pub fn select_forward_model(
 
 // ── Upstream selection ───────────────────────────────────────────────────────
 
-use crate::error::AppError;
 use crate::db;
+use crate::error::AppError;
 use rand::prelude::SliceRandom;
 
 /// Core upstream selection.
@@ -200,8 +200,9 @@ use rand::prelude::SliceRandom;
 ///    (value can be an id or a name).
 /// 2. Otherwise fetch all enabled upstreams.
 /// 3. Filter by model match score, keeping only those with the highest score.
-/// 4. Group by priority, skip back-off'd upstreams, randomly pick within the
-///    highest-priority group.
+/// 4. Group by priority and randomly pick within the highest-priority group.
+///    Prefer non-back-off upstreams, but fall back to backed-off candidates
+///    when no other matching enabled upstream is available.
 pub async fn select_upstream(
     pool: &sqlx::SqlitePool,
     backoff: &BackoffManager,
@@ -214,7 +215,7 @@ pub async fn select_upstream(
         if let Ok(id) = selector.parse::<i64>() {
             let row = db::upstream::get_upstream(pool, id).await?;
             if let Some(upstream) = row {
-                if upstream.enabled == 1 {
+                if upstream.enabled == 1 && match_model(&upstream, model) {
                     let fwd = select_forward_model(&upstream, model);
                     return Ok(Some((upstream, fwd)));
                 }
@@ -224,7 +225,7 @@ pub async fn select_upstream(
         // Then try as name
         let row = db::upstream::get_upstream_by_name(pool, selector).await?;
         if let Some(upstream) = row {
-            if upstream.enabled == 1 {
+            if upstream.enabled == 1 && match_model(&upstream, model) {
                 let fwd = select_forward_model(&upstream, model);
                 return Ok(Some((upstream, fwd)));
             }
@@ -248,25 +249,43 @@ pub async fn select_upstream(
     if let Some(_) = model {
         // keep the best score
         let best = scored.iter().map(|(_, s)| *s).max().unwrap_or(0);
+        if best <= 0 {
+            return Ok(None);
+        }
         scored.retain(|(_, s)| *s == best);
     }
 
-    // Group by priority, skip back-off upstreams
-    let mut by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
+    // Prefer healthy candidates. A backed-off upstream remains a last-resort
+    // route so a temporary back-off never turns an otherwise usable pool into
+    // "no upstream available".
+    let mut available_by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
+    let mut backed_off_by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
     for (up, _) in &scored {
         if backoff.is_backed_off(up.id) {
-            continue;
+            backed_off_by_priority
+                .entry(up.priority)
+                .or_default()
+                .push(up);
+        } else {
+            available_by_priority
+                .entry(up.priority)
+                .or_default()
+                .push(up);
         }
-        by_priority.entry(up.priority).or_default().push(up);
     }
 
-    if by_priority.is_empty() {
+    let candidates_by_priority = if available_by_priority.is_empty() {
+        &backed_off_by_priority
+    } else {
+        &available_by_priority
+    };
+    if candidates_by_priority.is_empty() {
         return Ok(None);
     }
 
-    // Pick the highest priority
-    let max_priority = by_priority.keys().max().copied().unwrap();
-    let candidates = by_priority.get(&max_priority).unwrap();
+    // Pick the highest priority within the preferred candidate set.
+    let max_priority = candidates_by_priority.keys().max().copied().unwrap();
+    let candidates = candidates_by_priority.get(&max_priority).unwrap();
 
     // Random choice within the group
     let chosen = candidates.choose(&mut rand::thread_rng()).unwrap();
@@ -274,4 +293,110 @@ pub async fn select_upstream(
     let fwd = select_forward_model(chosen, model);
 
     Ok(Some(((*chosen).clone(), fwd)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_upstream, BackoffManager};
+    use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE upstreams (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL UNIQUE,
+                base_url        TEXT NOT NULL,
+                api_key         TEXT,
+                model_names     TEXT NOT NULL DEFAULT '[]',
+                model_prefixes  TEXT NOT NULL DEFAULT '[]',
+                model_mappings  TEXT NOT NULL DEFAULT '{}',
+                priority        INTEGER NOT NULL DEFAULT 100,
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                extra_headers   TEXT NOT NULL DEFAULT '{}',
+                timeout_seconds REAL NOT NULL DEFAULT 300.0,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn insert_upstream(pool: &SqlitePool, name: &str, model_names: &[&str], priority: i32) {
+        sqlx::query(
+            r#"
+            INSERT INTO upstreams
+                (name, base_url, model_names, model_prefixes, model_mappings,
+                 priority, enabled, extra_headers, timeout_seconds)
+            VALUES (?, 'https://example.test', ?, '[]', '{}', ?, 1, '{}', 300.0)
+            "#,
+        )
+        .bind(name)
+        .bind(serde_json::to_string(model_names).unwrap())
+        .bind(priority)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pool_selection_rejects_only_enabled_channel_when_model_does_not_match() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+
+        let selected = select_upstream(&pool, &BackoffManager::new(), None, Some("gpt-5.5"))
+            .await
+            .unwrap();
+
+        assert!(selected.is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_selection_cannot_bypass_model_matching() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+
+        let by_name = select_upstream(
+            &pool,
+            &BackoffManager::new(),
+            Some("deepseek-only"),
+            Some("gpt-5.5"),
+        )
+        .await
+        .unwrap();
+        let by_id = select_upstream(&pool, &BackoffManager::new(), Some("1"), Some("gpt-5.5"))
+            .await
+            .unwrap();
+
+        assert!(by_name.is_none());
+        assert!(by_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn matching_model_still_selects_enabled_channel() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+
+        let selected = select_upstream(
+            &pool,
+            &BackoffManager::new(),
+            None,
+            Some("DeepSeek-V4-Flash"),
+        )
+        .await
+        .unwrap();
+
+        let (upstream, forward_model) = selected.unwrap();
+        assert_eq!(upstream.name, "deepseek-only");
+        assert_eq!(forward_model.as_deref(), Some("DeepSeek-V4-Flash"));
+    }
 }

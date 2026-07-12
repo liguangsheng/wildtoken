@@ -1,7 +1,11 @@
 .git
+.opencode
 target
+data
 *.db
 *.db-shm
 *.db-wal
 wildtoken.db*
 *.log
+.wildtoken.bin
+.env

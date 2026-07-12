@@ -9,12 +9,12 @@ pub struct UpstreamRow {
     pub name: String,
     pub base_url: String,
     pub api_key: Option<String>,
-    pub model_names: String,      // JSON array string "[]"
-    pub model_prefixes: String,   // JSON array string "[]"
-    pub model_mappings: String,   // JSON object string "{}"
+    pub model_names: String,    // JSON array string "[]"
+    pub model_prefixes: String, // JSON array string "[]"
+    pub model_mappings: String, // JSON object string "{}"
     pub priority: i32,
-    pub enabled: i64,             // 0 or 1
-    pub extra_headers: String,    // JSON object string "{}"
+    pub enabled: i64,          // 0 or 1
+    pub extra_headers: String, // JSON object string "{}"
     pub timeout_seconds: f64,
     pub created_at: String,
     pub updated_at: String,

@@ -64,31 +64,24 @@ fn row_to_upstream_detail_out(
 // ── Public functions ──────────────────────────────────────────────────────────
 
 pub async fn list_upstreams(pool: &SqlitePool) -> Result<Vec<UpstreamOut>, AppError> {
-    let rows: Vec<UpstreamRow> = sqlx::query_as(
-        "SELECT * FROM upstreams ORDER BY priority DESC, id ASC",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<UpstreamRow> =
+        sqlx::query_as("SELECT * FROM upstreams ORDER BY priority DESC, id ASC")
+            .fetch_all(pool)
+            .await?;
 
     rows.iter().map(|r| row_to_upstream_out(r, None)).collect()
 }
 
-pub async fn list_enabled_upstreams(
-    pool: &SqlitePool,
-) -> Result<Vec<UpstreamRow>, AppError> {
-    let rows = sqlx::query_as(
-        "SELECT * FROM upstreams WHERE enabled = 1 ORDER BY priority DESC, id ASC",
-    )
-    .fetch_all(pool)
-    .await?;
+pub async fn list_enabled_upstreams(pool: &SqlitePool) -> Result<Vec<UpstreamRow>, AppError> {
+    let rows =
+        sqlx::query_as("SELECT * FROM upstreams WHERE enabled = 1 ORDER BY priority DESC, id ASC")
+            .fetch_all(pool)
+            .await?;
 
     Ok(rows)
 }
 
-pub async fn get_upstream(
-    pool: &SqlitePool,
-    id: i64,
-) -> Result<Option<UpstreamRow>, AppError> {
+pub async fn get_upstream(pool: &SqlitePool, id: i64) -> Result<Option<UpstreamRow>, AppError> {
     let row = sqlx::query_as("SELECT * FROM upstreams WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)

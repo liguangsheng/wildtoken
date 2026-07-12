@@ -2,23 +2,31 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::{rngs::OsRng, RngCore};
 use serde::Deserialize;
 
-use crate::db::{log as log_db, token as token_db, upstream as upstream_db};
+use crate::db::{
+    log as log_db, settings as settings_db, token as token_db, upstream as upstream_db,
+};
 use crate::error::AppError;
 use crate::middleware::auth::AdminAuth;
 use crate::models::request_log::{
-    ModelFetchIn, ModelListOut, RequestLogPage, TestRequest,
+    ModelFetchIn, ModelListOut, RequestLogPage, TestRequest, TokenUsageStatsOut,
+};
+use crate::models::settings::{
+    AdminTokenRotateIn, AdminTokenRotateOut, RuntimeLogSettingsSummary, RuntimeSettingsIn,
+    RuntimeSettingsOut, SystemInfoOut,
 };
 use crate::models::token::{ApiTokenDetailOut, ApiTokenIn};
 use crate::models::upstream::{
     UpstreamDetailOut, UpstreamEnabledIn, UpstreamIn, UpstreamPriorityIn, UpstreamUpdate,
 };
-use crate::state::AppState;
+use crate::state::{hash_admin_token, AppState};
 
 // ── URL helper (aligned with Python build_upstream_url) ───────────────────────
 
@@ -86,14 +94,16 @@ async fn fetch_models_for_target(
         }
     }
 
-    let response = req.send().await.map_err(|e| {
-        AppError::UpstreamError(format!("upstream request failed: {e}"))
-    })?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| AppError::UpstreamError(format!("upstream request failed: {e}")))?;
 
     let status = response.status();
-    let text = response.text().await.map_err(|e| {
-        AppError::UpstreamError(format!("upstream body read failed: {e}"))
-    })?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| AppError::UpstreamError(format!("upstream body read failed: {e}")))?;
 
     if !status.is_success() {
         let preview: String = text.chars().take(300).collect();
@@ -130,6 +140,128 @@ pub async fn health_check(
     })))
 }
 
+// ── Runtime settings ─────────────────────────────────────────────────────────
+
+pub async fn admin_get_runtime_settings(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<Json<RuntimeSettingsOut>, AppError> {
+    let snapshot = state.runtime_settings.read().await.clone();
+    Ok(Json(RuntimeSettingsOut::from(&snapshot)))
+}
+
+pub async fn admin_update_runtime_settings(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(input): Json<RuntimeSettingsIn>,
+) -> Result<Json<RuntimeSettingsOut>, AppError> {
+    input
+        .validate()
+        .map_err(|message| AppError::BadRequest(message.into()))?;
+    let updated = settings_db::update_runtime_settings(&state.db, &input).await?;
+    {
+        let mut snapshot = state.runtime_settings.write().await;
+        if updated.revision > snapshot.revision {
+            *snapshot = updated.clone();
+        }
+    }
+    Ok(Json(RuntimeSettingsOut::from(&updated)))
+}
+
+// ── Admin credential and system information ──────────────────────────────────
+
+pub async fn admin_rotate_admin_token(
+    State(state): State<AppState>,
+    auth: AdminAuth,
+    Json(input): Json<AdminTokenRotateIn>,
+) -> Result<Response, AppError> {
+    if !input.confirm {
+        return Err(AppError::BadRequest(
+            "explicit confirmation is required".into(),
+        ));
+    }
+
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = URL_SAFE_NO_PAD.encode(bytes);
+    let hash = hash_admin_token(token.clone()).await?;
+    let credential =
+        settings_db::rotate_admin_credential(&state.db, &hash, auth.credential_version)
+            .await?
+            .ok_or_else(|| AppError::Conflict("admin credential version conflict".into()))?;
+
+    // The snapshot is published only after the credential transaction commits.
+    // Publication is monotonic even if concurrent rotations finish out of order.
+    state.publish_admin_credential(credential).await;
+    let mut response = Json(AdminTokenRotateOut { token }).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+pub async fn admin_system_info(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Json<SystemInfoOut> {
+    let database_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+    let database_allocated_bytes = if database_ok {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT (SELECT page_count FROM pragma_page_count()) * (SELECT page_size FROM pragma_page_size())",
+        )
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let total_log_count = sqlx::query_scalar("SELECT COUNT(*) FROM request_logs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    let log_count_24h = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM request_logs WHERE created_at >= datetime('now', '-24 hours')",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+    let recent_one_minute_log_count = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM request_logs WHERE created_at >= datetime('now', '-60 seconds')",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+    let (enabled_upstream_count, total_upstream_count) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0), COUNT(*) FROM upstreams",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0, 0));
+    let settings = state.runtime_settings.read().await.clone();
+
+    Json(SystemInfoOut {
+        service: "WildToken",
+        version: env!("CARGO_PKG_VERSION"),
+        default_upstream_timeout_seconds: state.settings.upstream.default_timeout_seconds,
+        uptime_seconds: state.started_at.elapsed().as_secs(),
+        current_server_time: chrono::Local::now().to_rfc3339(),
+        database_ok,
+        database_allocated_bytes,
+        total_log_count,
+        log_count_24h,
+        enabled_upstream_count,
+        total_upstream_count,
+        recent_one_minute_log_count,
+        runtime_log_settings: RuntimeLogSettingsSummary {
+            log_body_keep_count: settings.log_body_keep_count,
+            log_retention_days: settings.log_retention_days,
+            log_body_max_bytes: settings.log_body_max_bytes,
+            revision: settings.revision,
+        },
+    })
+}
+
 // ── Upstreams ────────────────────────────────────────────────────────────────
 
 pub async fn admin_list_upstreams(
@@ -153,10 +285,8 @@ pub async fn admin_get_upstream(
         .ok_or_else(|| AppError::NotFound("upstream not found".into()))?;
 
     let backoff = state.backoff.backoff_remaining_seconds(row.id);
-    let model_names: Vec<String> =
-        serde_json::from_str(&row.model_names).unwrap_or_default();
-    let model_prefixes: Vec<String> =
-        serde_json::from_str(&row.model_prefixes).unwrap_or_default();
+    let model_names: Vec<String> = serde_json::from_str(&row.model_names).unwrap_or_default();
+    let model_prefixes: Vec<String> = serde_json::from_str(&row.model_prefixes).unwrap_or_default();
     let model_mappings: HashMap<String, String> =
         serde_json::from_str(&row.model_mappings).unwrap_or_default();
     let extra_headers: HashMap<String, String> =
@@ -279,7 +409,9 @@ pub async fn admin_test_upstream(
     let mut req = state
         .http_client
         .get(&target_url)
-        .timeout(std::time::Duration::from_secs_f64(row.timeout_seconds.max(1.0)));
+        .timeout(std::time::Duration::from_secs_f64(
+            row.timeout_seconds.max(1.0),
+        ));
 
     let extra = parse_extra_headers(&row.extra_headers);
     for (k, v) in &extra {
@@ -506,11 +638,9 @@ pub async fn admin_create_token(
 ) -> Result<Response, AppError> {
     match token_db::create_token(&state.db, &input).await {
         Ok(out) => Ok((StatusCode::CREATED, Json(out)).into_response()),
-        Err(AppError::Database(e)) if e.to_string().contains("UNIQUE") => {
-            Err(AppError::BadRequest(
-                "token name or value already exists".into(),
-            ))
-        }
+        Err(AppError::Database(e)) if e.to_string().contains("UNIQUE") => Err(
+            AppError::BadRequest("token name or value already exists".into()),
+        ),
         Err(e) => Err(e),
     }
 }
@@ -563,6 +693,8 @@ pub struct LogQuery {
     #[serde(default)]
     offset: i32,
     upstream_id: Option<i64>,
+    search: Option<String>,
+    status: Option<String>,
 }
 
 fn default_limit() -> i32 {
@@ -576,13 +708,40 @@ pub async fn admin_list_logs(
 ) -> Result<Json<RequestLogPage>, AppError> {
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
-    let mut items =
-        log_db::list_logs(&state.db, limit + 1, offset, query.upstream_id).await?;
+    let search = query
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let status = query
+        .status
+        .as_deref()
+        .filter(|status| matches!(*status, "2xx" | "4xx" | "5xx" | "none"));
+    let (mut items, recent_rpm) = log_db::list_logs(
+        &state.db,
+        limit + 1,
+        offset,
+        query.upstream_id,
+        search,
+        status,
+    )
+    .await?;
     let has_more = items.len() as i32 > limit;
     if has_more {
         items.truncate(limit as usize);
     }
-    Ok(Json(RequestLogPage { items, has_more }))
+    Ok(Json(RequestLogPage {
+        items,
+        has_more,
+        recent_rpm,
+    }))
+}
+
+pub async fn admin_token_usage_stats(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<Json<TokenUsageStatsOut>, AppError> {
+    Ok(Json(log_db::token_usage_stats(&state.db).await?))
 }
 
 pub async fn admin_get_log_detail(

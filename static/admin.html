@@ -14,6 +14,13 @@
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "dark");
         }
+        try {
+          var d = localStorage.getItem("wildtoken_density");
+          if (d !== "compact" && d !== "comfortable") d = "comfortable";
+          document.documentElement.setAttribute("data-density", d);
+        } catch (e) {
+          document.documentElement.setAttribute("data-density", "comfortable");
+        }
       })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -50,11 +57,26 @@
           </div>
         </div>
         <div class="topbar-nav" role="tablist" aria-label="主导航">
+          <button type="button" class="nav-link" data-view="dashboard">看板</button>
           <button type="button" class="nav-link" data-view="upstreams">渠道</button>
           <button type="button" class="nav-link" data-view="logs">日志</button>
           <button type="button" class="nav-link" data-view="tokens">令牌</button>
+          <button type="button" class="nav-link" data-view="settings">设置</button>
         </div>
         <div class="topbar-actions">
+          <span id="live-indicator" class="live-indicator" hidden title="自动刷新中">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span class="live-label">实时</span>
+          </span>
+          <button
+            type="button"
+            id="density-toggle"
+            class="secondary ghost density-toggle"
+            aria-label="切换紧凑密度"
+            title="切换密度"
+          >
+            <span class="density-toggle-label">密度</span>
+          </button>
           <button
             type="button"
             id="theme-toggle"
@@ -69,7 +91,76 @@
       </nav>
 
       <main class="content">
-        <section class="view" data-view="upstreams">
+        <section class="view" data-view="dashboard">
+          <section class="panel dashboard-panel">
+            <div class="panel-head">
+              <div>
+                <h2>数据看板</h2>
+                <p id="dashboard-scope">基于已加载的近窗日志与渠道状态 · 非全库实时统计</p>
+              </div>
+              <div class="actions">
+                <button type="button" id="dashboard-refresh" class="secondary">刷新</button>
+              </div>
+            </div>
+
+            <div id="dashboard-kpis" class="dashboard-kpis" aria-live="polite"></div>
+
+            <div class="dashboard-grid">
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>状态分布</h3>
+                  <span class="dashboard-card-meta" id="dashboard-status-meta">近 N 条</span>
+                </div>
+                <div id="dashboard-status-chart" class="dashboard-chart"></div>
+              </div>
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>延迟趋势</h3>
+                  <span class="dashboard-card-meta" id="dashboard-latency-meta">近 N 条</span>
+                </div>
+                <div id="dashboard-latency-chart" class="dashboard-chart"></div>
+              </div>
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>Top 模型</h3>
+                  <span class="dashboard-card-meta" id="dashboard-models-meta">按请求数</span>
+                </div>
+                <div id="dashboard-top-models" class="dashboard-list"></div>
+              </div>
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>Top 渠道</h3>
+                  <span class="dashboard-card-meta" id="dashboard-channels-meta">按请求数</span>
+                </div>
+                <div id="dashboard-top-channels" class="dashboard-list"></div>
+              </div>
+              <div class="dashboard-card dashboard-card-wide">
+                <div class="panel-head dashboard-card-head">
+                  <div>
+                    <h3>最近失败</h3>
+                    <p class="dashboard-card-sub">近窗内 4xx/5xx/无响应</p>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table class="admin-table dashboard-error-table">
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>渠道</th>
+                        <th>模型</th>
+                        <th>状态</th>
+                        <th>耗时</th>
+                      </tr>
+                    </thead>
+                    <tbody id="dashboard-error-rows"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="upstreams" hidden>
           <section class="panel">
             <div class="panel-head">
               <div>
@@ -82,16 +173,47 @@
               </div>
             </div>
             <div id="upstream-summary" class="summary-strip" aria-live="polite"></div>
+            <div class="view-toolbar upstream-toolbar">
+              <label class="filter-field">
+                搜索
+                <input
+                  id="upstream-search"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="名称、Base URL、模型…"
+                />
+              </label>
+              <label class="filter-field">
+                状态
+                <select id="upstream-status-filter">
+                  <option value="">全部</option>
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                  <option value="backoff">退避</option>
+                </select>
+              </label>
+              <div class="toolbar-batch" id="upstream-batch-actions" hidden>
+                <button type="button" id="batch-enable" class="secondary">批量启用</button>
+                <button type="button" id="batch-disable" class="secondary">批量停用</button>
+              </div>
+              <div class="col-menu-wrap">
+                <button type="button" id="upstream-col-menu-btn" class="secondary ghost col-menu-btn" aria-haspopup="true" aria-expanded="false">列</button>
+                <div id="upstream-col-menu" class="col-menu" hidden role="menu" aria-label="渠道列显示"></div>
+              </div>
+            </div>
             <div class="table-wrap">
-              <table class="admin-table upstream-table">
+              <table class="admin-table upstream-table" id="upstream-table">
                 <thead>
                   <tr>
-                    <th>名称</th>
-                    <th>Base URL</th>
-                    <th>模型匹配</th>
-                    <th>优先级</th>
-                    <th class="col-status">状态</th>
-                    <th class="col-actions">操作</th>
+                    <th class="col-check" data-col="check">
+                      <input type="checkbox" id="upstream-select-all" aria-label="全选当前筛选渠道" />
+                    </th>
+                    <th data-col="name">名称</th>
+                    <th data-col="base_url">Base URL</th>
+                    <th data-col="models">模型匹配</th>
+                    <th data-col="priority">优先级</th>
+                    <th class="col-status" data-col="status">状态</th>
+                    <th class="col-actions" data-col="actions">操作</th>
                   </tr>
                 </thead>
                 <tbody id="upstream-rows"></tbody>
@@ -105,7 +227,7 @@
             <div class="panel-head">
               <div>
                 <h2>使用日志</h2>
-                <p>代理请求记录、状态码与耗时。</p>
+                <p id="log-rpm" class="log-rpm" aria-live="polite">RPM —</p>
               </div>
               <div class="log-toolbar">
                 <label class="log-filter">
@@ -114,21 +236,44 @@
                     <option value="">全部渠道</option>
                   </select>
                 </label>
+                <label class="log-filter">
+                  搜索
+                  <input
+                    id="log-search"
+                    type="search"
+                    autocomplete="off"
+                    placeholder="模型、渠道、状态码…"
+                  />
+                </label>
+                <label class="log-filter">
+                  状态码
+                  <select id="log-status-filter">
+                    <option value="">全部</option>
+                    <option value="2xx">2xx</option>
+                    <option value="4xx">4xx</option>
+                    <option value="5xx">5xx</option>
+                    <option value="none">无响应</option>
+                  </select>
+                </label>
+                <div class="col-menu-wrap">
+                  <button type="button" id="log-col-menu-btn" class="secondary ghost col-menu-btn" aria-haspopup="true" aria-expanded="false">列</button>
+                  <div id="log-col-menu" class="col-menu" hidden role="menu" aria-label="日志列显示"></div>
+                </div>
                 <button id="log-refresh" type="button" class="secondary">刷新</button>
               </div>
             </div>
             <div id="log-status" class="status" role="status"></div>
             <div class="table-wrap">
-              <table class="admin-table log-table">
+              <table class="admin-table log-table" id="log-table">
                 <thead>
                   <tr>
-                    <th>时间</th>
-                    <th>渠道</th>
-                    <th>模型</th>
-                    <th class="col-reasoning">思考强度</th>
-                    <th>状态码</th>
-                    <th>首字 / 总耗时（s）</th>
-                    <th>Tokens（prompt/completion/total）</th>
+                    <th data-col="time">时间</th>
+                    <th data-col="channel">渠道</th>
+                    <th data-col="model">模型</th>
+                    <th class="col-reasoning" data-col="reasoning">思考强度</th>
+                    <th data-col="status">状态码</th>
+                    <th data-col="duration">首字 / 总耗时（s）</th>
+                    <th data-col="tokens">Tokens（prompt/completion/total）</th>
                   </tr>
                 </thead>
                 <tbody id="log-rows"></tbody>
@@ -152,6 +297,17 @@
                 <button id="new-token" type="button">新增令牌</button>
               </div>
             </div>
+            <div class="view-toolbar token-toolbar">
+              <label class="filter-field">
+                搜索
+                <input
+                  id="token-search"
+                  type="search"
+                  autocomplete="off"
+                  placeholder="名称、描述、预览…"
+                />
+              </label>
+            </div>
             <div class="table-wrap">
               <table class="admin-table token-table">
                 <thead>
@@ -168,6 +324,59 @@
             </div>
           </section>
         </section>
+        <section class="view settings-view" data-view="settings" hidden>
+          <section class="panel settings-hero">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">CONSOLE CONTROL</span>
+                <h2>设置</h2>
+                <p>将本机偏好与网关运行策略分别管理；敏感凭证不会在此读取或保存。</p>
+              </div>
+            </div>
+
+            <div class="settings-stack">
+              <section class="settings-card" aria-labelledby="preferences-title">
+                <div class="settings-card-head">
+                  <div><h3 id="preferences-title">控制台偏好</h3><p>仅保存在当前浏览器，并立即生效。</p></div>
+                  <span class="settings-local-tag">本地</span>
+                </div>
+                <div class="settings-preferences-grid">
+                  <fieldset class="settings-choice-group"><legend>主题</legend><div class="segmented-control" id="settings-theme" aria-label="主题"><button type="button" data-theme-choice="dark">深色</button><button type="button" data-theme-choice="light">浅色</button></div></fieldset>
+                  <fieldset class="settings-choice-group"><legend>显示密度</legend><div class="segmented-control" id="settings-density" aria-label="显示密度"><button type="button" data-density-choice="comfortable">舒适</button><button type="button" data-density-choice="compact">紧凑</button></div></fieldset>
+                  <label class="field"><span class="field-label">日志自动刷新</span><select id="settings-log-refresh" aria-label="日志自动刷新间隔"><option value="0">关闭</option><option value="5">每 5 秒</option><option value="10">每 10 秒</option><option value="30">每 30 秒</option></select><span class="field-hint">仅影响日志页；手动刷新始终可用。</span></label>
+                  <label class="field"><span class="field-label">默认首页</span><select id="settings-default-home" aria-label="默认首页"><option value="dashboard">看板</option><option value="upstreams">渠道</option><option value="logs">日志</option><option value="tokens">令牌</option><option value="settings">设置</option></select><span class="field-hint">直接打开带有效地址片段的页面时，仍会优先进入该页面。</span></label>
+                </div>
+              </section>
+
+              <section class="settings-card" aria-labelledby="log-settings-title">
+                <div class="settings-card-head"><div><h3 id="log-settings-title">日志与存储</h3><p>这些策略由服务端保存，保存后用于新的快照；清理规则在下一轮清理周期生效。</p></div><span id="settings-revision" class="settings-revision">尚未加载</span></div>
+                <form id="server-settings-form" class="settings-server-form">
+                  <div class="settings-fields-grid">
+                    <label class="field"><span class="field-label">正文保留数量</span><input id="settings-body-keep-count" type="number" min="1" max="10000" required inputmode="numeric" /><span class="field-hint">每条日志保留的正文快照数量。</span></label>
+                    <label class="field"><span class="field-label">日志保留天数</span><input id="settings-retention-days" type="number" min="1" max="3650" required inputmode="numeric" /><span class="field-hint">超过期限的日志会在下一轮清理时移除。</span></label>
+                    <label class="field span-2"><span class="field-label">原始正文采集上限（字节）</span><input id="settings-body-max-bytes" type="number" min="0" max="1048576" required inputmode="numeric" /><span class="field-hint">设为 0 时只保留元数据和请求头，不采集正文。</span></label>
+                  </div>
+                  <div class="settings-save-row"><p id="server-settings-status" class="settings-inline-status" role="status"></p><button id="server-settings-save" type="submit">保存日志策略</button></div>
+                </form>
+              </section>
+
+              <section class="settings-card settings-readonly" aria-labelledby="gateway-default-title">
+                <div class="settings-card-head"><div><h3 id="gateway-default-title">网关默认值</h3><p>启动时读取的默认上游超时。</p></div><span class="settings-readonly-tag">只读</span></div>
+                <div class="settings-note"><strong>默认上游超时：<span id="settings-default-timeout">由启动配置决定</span></strong><p>现有渠道均有明确的超时值；请前往「渠道」按渠道管理。本页不提供动态全局超时设置。</p></div>
+              </section>
+
+              <section class="settings-card settings-security" aria-labelledby="security-title">
+                <div class="settings-card-head"><div><h3 id="security-title">安全</h3><p>轮换后旧管理员令牌会立即失效；新令牌只显示一次。</p></div><span class="settings-security-mark">敏感操作</span></div>
+                <div class="settings-action-row"><div><strong>轮换管理员令牌</strong><p>先确认，再生成一枚新的访问凭证。请准备好立即复制并安全保存。</p></div><button id="rotate-admin-token" type="button" class="danger">轮换令牌</button></div>
+              </section>
+
+              <section class="settings-card" aria-labelledby="system-title">
+                <div class="settings-card-head"><div><h3 id="system-title">运行信息</h3><p>只展示服务状态与汇总信息，不包含环境路径或秘密。</p></div><button id="system-refresh" type="button" class="secondary">刷新</button></div>
+                <div id="system-info-grid" class="system-info-grid" aria-live="polite"><p class="settings-loading">进入设置页后加载运行信息。</p></div>
+              </section>
+            </div>
+          </section>
+        </section>
       </main>
     </div>
     <dialog id="upstream-dialog" class="upstream-dialog">
@@ -177,7 +386,7 @@
             <h2 id="form-title">新增渠道</h2>
             <p>配置路由可用的上游渠道。</p>
           </div>
-          <button id="upstream-dialog-close" type="button" class="secondary ghost">关闭</button>
+          <button id="upstream-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <input id="upstream-id" type="hidden" />
 
@@ -297,7 +506,7 @@
             <h2>快速导入</h2>
             <p>粘贴含 Base URL 与 API Key 的文本，识别后填入新增表单。</p>
           </div>
-          <button id="quick-import-close" type="button" class="secondary ghost">关闭</button>
+          <button id="quick-import-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <label class="field">
           <span class="field-label">粘贴文本</span>
@@ -329,7 +538,7 @@
             <h2 id="model-dialog-title">选择模型</h2>
             <p id="model-dialog-summary"></p>
           </div>
-          <button id="model-dialog-close" type="button" class="secondary ghost">关闭</button>
+          <button id="model-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <div class="model-toolbar">
           <label class="field">
@@ -355,13 +564,13 @@
             <h2 id="log-detail-title">请求详情</h2>
             <p id="log-detail-summary"></p>
           </div>
-          <button id="log-detail-close" type="button" class="secondary ghost">关闭</button>
+          <button id="log-detail-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <div id="log-detail-meta" class="log-detail-meta" aria-live="polite"></div>
         <div class="log-detail-sections-head">
           <div>
             <h3>请求 / 响应快照</h3>
-            <p>点击展开；内容在展开时加载。</p>
+            <p>点击展开；正文会自动换行。需要逐段核查时可使用“放大查看”。</p>
           </div>
         </div>
         <div class="request-detail-grid">
@@ -374,6 +583,7 @@
               <span class="log-detail-summary-state" aria-hidden="true"></span>
             </summary>
             <div class="log-detail-code-frame">
+              <button type="button" class="secondary ghost log-detail-expand" aria-pressed="false">放大查看</button>
               <pre id="downstream-request-detail"></pre>
             </div>
           </details>
@@ -386,6 +596,7 @@
               <span class="log-detail-summary-state" aria-hidden="true"></span>
             </summary>
             <div class="log-detail-code-frame">
+              <button type="button" class="secondary ghost log-detail-expand" aria-pressed="false">放大查看</button>
               <pre id="upstream-request-detail"></pre>
             </div>
           </details>
@@ -398,6 +609,7 @@
               <span class="log-detail-summary-state" aria-hidden="true"></span>
             </summary>
             <div class="log-detail-code-frame">
+              <button type="button" class="secondary ghost log-detail-expand" aria-pressed="false">放大查看</button>
               <pre id="upstream-response-detail"></pre>
             </div>
           </details>
@@ -410,6 +622,7 @@
               <span class="log-detail-summary-state" aria-hidden="true"></span>
             </summary>
             <div class="log-detail-code-frame">
+              <button type="button" class="secondary ghost log-detail-expand" aria-pressed="false">放大查看</button>
               <pre id="downstream-response-detail"></pre>
             </div>
           </details>
@@ -423,7 +636,7 @@
             <h2 id="balance-title">余额查询</h2>
             <p id="balance-summary"></p>
           </div>
-          <button id="balance-close" type="button" class="secondary ghost">关闭</button>
+          <button id="balance-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <div id="balance-body" class="balance-body"></div>
       </div>
@@ -474,7 +687,7 @@
             <h2 id="token-form-title">新增令牌</h2>
             <p>创建下游 API 访问令牌。</p>
           </div>
-          <button id="token-dialog-close" type="button" class="secondary ghost">关闭</button>
+          <button id="token-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
         </div>
         <input id="token-id" type="hidden" />
         <div class="upstream-dialog-body">
@@ -516,6 +729,59 @@
           <button type="submit">保存令牌</button>
         </div>
       </form>
+    </dialog>
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <div class="confirm-panel">
+        <div class="modal-head">
+          <div>
+            <h2 id="confirm-title">确认操作</h2>
+            <p id="confirm-message"></p>
+          </div>
+          <button id="confirm-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+        </div>
+        <div class="modal-actions confirm-actions">
+          <button id="confirm-cancel" type="button" class="secondary">取消</button>
+          <button id="confirm-ok" type="button" class="danger">删除</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="rotate-confirm-dialog" class="confirm-dialog" aria-labelledby="rotate-confirm-title">
+      <div class="confirm-panel">
+        <div class="modal-head"><div><h2 id="rotate-confirm-title">轮换管理员令牌</h2><p>轮换后旧令牌立即失效。新令牌只显示一次，请确认你已准备好复制并安全保存。</p></div></div>
+        <label class="rotate-confirm-check"><input id="rotate-confirm-check" type="checkbox" /><span>我了解旧令牌会立即失效，且新令牌只显示一次。</span></label>
+        <div class="modal-actions confirm-actions"><button id="rotate-confirm-cancel" type="button" class="secondary">取消</button><button id="rotate-confirm-submit" type="button" class="danger" disabled>确认轮换</button></div>
+      </div>
+    </dialog>
+    <dialog id="rotated-token-dialog" class="confirm-dialog rotated-token-dialog" aria-labelledby="rotated-token-title">
+      <div class="confirm-panel rotated-token-panel">
+        <div class="modal-head"><div><h2 id="rotated-token-title">立即保存新令牌</h2><p>这枚管理员令牌只显示这一次。复制并保存后，退出当前控制台。</p></div></div>
+        <div class="one-time-token"><code id="rotated-token-value"></code><button id="rotated-token-copy" type="button" class="secondary">复制</button></div>
+        <p class="rotated-token-warning">当前控制台仍使用旧令牌。保存完成后退出登录；旧令牌已失效。</p>
+        <div class="modal-actions"><button id="rotated-token-logout" type="button">我已保存，退出登录</button></div>
+      </div>
+    </dialog>
+    <dialog id="command-palette" class="command-palette-dialog">
+      <div class="command-palette-panel">
+        <div class="command-palette-head">
+          <input
+            id="command-palette-input"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="输入命令或跳转…"
+            aria-label="命令面板"
+            aria-controls="command-palette-list"
+            aria-autocomplete="list"
+          />
+          <kbd class="command-palette-hint">Esc</kbd>
+        </div>
+        <div
+          id="command-palette-list"
+          class="command-palette-list"
+          role="listbox"
+          aria-label="命令列表"
+        ></div>
+      </div>
     </dialog>
     <div
       id="toast-region"

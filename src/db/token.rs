@@ -23,8 +23,9 @@ pub fn token_preview(token: &str, len: usize) -> String {
 // ── Public functions ────────────────────────────────────────────────────────
 
 pub async fn list_tokens(pool: &SqlitePool) -> Result<Vec<ApiTokenOut>, AppError> {
-    let rows: Vec<ApiTokenRow> =
-        sqlx::query_as("SELECT * FROM api_tokens ORDER BY id ASC").fetch_all(pool).await?;
+    let rows: Vec<ApiTokenRow> = sqlx::query_as("SELECT * FROM api_tokens ORDER BY id ASC")
+        .fetch_all(pool)
+        .await?;
 
     rows.iter()
         .map(|r| {
@@ -66,10 +67,7 @@ pub async fn create_token(
     pool: &SqlitePool,
     input: &ApiTokenIn,
 ) -> Result<ApiTokenDetailOut, AppError> {
-    let token_value = input
-        .token
-        .clone()
-        .unwrap_or_else(generate_api_token);
+    let token_value = input.token.clone().unwrap_or_else(generate_api_token);
 
     let result = sqlx::query(
         r#"INSERT INTO api_tokens (name, description, token, created_at, updated_at)

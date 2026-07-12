@@ -1,3 +1,3 @@
-pub mod matcher;
 pub mod client;
 pub mod logging;
+pub mod matcher;
