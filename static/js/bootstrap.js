@@ -1,0 +1,821 @@
+// Shared DOM references, mutable view state, and cross-view utilities.
+const ADMIN_TOKEN_KEY = "wildtoken_admin_token";
+const adminTokenDialog = document.querySelector("#admin-token-dialog");
+const adminTokenForm = document.querySelector("#admin-token-form");
+const adminTokenInput = document.querySelector("#admin-token-input");
+const adminTokenError = document.querySelector("#admin-token-error");
+const adminLogoutButton = document.querySelector("#admin-logout");
+
+const balanceDialog = document.querySelector("#balance-dialog");
+const balanceTitle = document.querySelector("#balance-title");
+const balanceSummary = document.querySelector("#balance-summary");
+const balanceBody = document.querySelector("#balance-body");
+const balanceClose = document.querySelector("#balance-close");
+
+const toastRegion = document.querySelector("#toast-region");
+const upstreamActionMenu = document.querySelector("#upstream-action-menu");
+const rows = document.querySelector("#upstream-rows");
+const upstreamSummary = document.querySelector("#upstream-summary");
+const form = document.querySelector("#upstream-form");
+const formTitle = document.querySelector("#form-title");
+const newButton = document.querySelector("#new-upstream");
+const resetButton = document.querySelector("#reset-form");
+const fetchModelsButton = document.querySelector("#fetch-models");
+const upstreamDialog = document.querySelector("#upstream-dialog");
+const upstreamDialogClose = document.querySelector("#upstream-dialog-close");
+const advancedSettings = document.querySelector("#advanced-settings");
+
+const quickImportButton = document.querySelector("#quick-import");
+const quickImportDialog = document.querySelector("#quick-import-dialog");
+const quickImportClose = document.querySelector("#quick-import-close");
+const quickImportCancel = document.querySelector("#quick-import-cancel");
+const quickImportText = document.querySelector("#quick-import-text");
+const quickImportBaseUrlInput = document.querySelector("#quick-import-baseurl");
+const quickImportApiKeyInput = document.querySelector("#quick-import-apikey");
+const quickImportFillButton = document.querySelector("#quick-import-fill");
+const QUICK_IMPORT_DEFAULT_PRIORITY = 999;
+const QUICK_IMPORT_FILL_LABEL = "填入并拉取模型";
+let quickImportFetchController = null;
+
+const confirmDialog = document.querySelector("#confirm-dialog");
+const confirmTitle = document.querySelector("#confirm-title");
+const confirmMessage = document.querySelector("#confirm-message");
+const confirmOk = document.querySelector("#confirm-ok");
+const confirmCancel = document.querySelector("#confirm-cancel");
+const confirmClose = document.querySelector("#confirm-close");
+
+const navLinks = document.querySelectorAll(".nav-link");
+const views = document.querySelectorAll(".view");
+const FALLBACK_VIEW = "dashboard";
+const LOG_TIME_ZONE = "Asia/Singapore";
+const logTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: LOG_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+// SQLite datetime('now') returns UTC without an offset. Treat unzoned values
+// as UTC explicitly so rendering does not depend on the browser's own timezone.
+function parseLogTimestamp(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return Number.NaN;
+  }
+  const normalized = value.trim().replace(" ", "T");
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  return Date.parse(hasOffset ? normalized : `${normalized}Z`);
+}
+
+function formatLogTimestamp(value) {
+  const timestamp = parseLogTimestamp(value);
+  return Number.isFinite(timestamp) ? logTimeFormatter.format(new Date(timestamp)) : "—";
+}
+
+
+const logStatusBox = document.querySelector("#log-status");
+const logRpm = document.querySelector("#log-rpm");
+const logRows = document.querySelector("#log-rows");
+const logUpstreamFilter = document.querySelector("#log-upstream-filter");
+const logSearchInput = document.querySelector("#log-search");
+const logStatusFilter = document.querySelector("#log-status-filter");
+const logRefreshButton = document.querySelector("#log-refresh");
+const logPrevButton = document.querySelector("#log-prev");
+const logNextButton = document.querySelector("#log-next");
+const logDetailDialog = document.querySelector("#log-detail-dialog");
+const logDetailTitle = document.querySelector("#log-detail-title");
+const logDetailSummary = document.querySelector("#log-detail-summary");
+const logDetailMeta = document.querySelector("#log-detail-meta");
+const logDetailClose = document.querySelector("#log-detail-close");
+const logDetailSections = document.querySelectorAll(".log-detail-section");
+const requestDetailGrid = document.querySelector(".request-detail-grid");
+let currentLogDetail = null;
+const LOG_PAGE_SIZE = 50;
+const LOG_REFRESH_KEY = "wildtoken_log_refresh_seconds";
+const DEFAULT_HOME_KEY = "wildtoken_default_home";
+const DEFAULT_REFRESH_MS = 10000;
+const DASHBOARD_REFRESH_MS = 15000;
+const DASHBOARD_LOG_LIMIT = 200;
+const DENSITY_KEY = "wildtoken_density";
+const LOG_COLUMNS_KEY = "wildtoken_log_columns";
+const UPSTREAM_COLUMNS_KEY = "wildtoken_upstream_columns";
+let logOffset = 0;
+let logHasMore = false;
+let logRefreshTimer = null;
+let logsLoadedOnce = false;
+let logsLoading = false;
+
+let dashboardLogItems = [];
+let dashboardTokenUsage = null;
+let dashboardRefreshTimer = null;
+let dashboardLoading = false;
+let lastDashboardLoadError = "";
+
+const dashboardScope = document.querySelector("#dashboard-scope");
+const dashboardRefreshButton = document.querySelector("#dashboard-refresh");
+const dashboardKpis = document.querySelector("#dashboard-kpis");
+const dashboardTokenKpis = document.querySelector("#dashboard-token-kpis");
+const dashboardRequestKpis = document.querySelector("#dashboard-request-kpis");
+const dashboardStatusChart = document.querySelector("#dashboard-status-chart");
+const dashboardStatusMeta = document.querySelector("#dashboard-status-meta");
+const dashboardLatencyChart = document.querySelector("#dashboard-latency-chart");
+const dashboardLatencyMeta = document.querySelector("#dashboard-latency-meta");
+const dashboardTopModels = document.querySelector("#dashboard-top-models");
+const dashboardModelsMeta = document.querySelector("#dashboard-models-meta");
+const dashboardTopChannels = document.querySelector("#dashboard-top-channels");
+const dashboardChannelsMeta = document.querySelector("#dashboard-channels-meta");
+const dashboardErrorRows = document.querySelector("#dashboard-error-rows");
+
+let upstreamRefreshTimer = null;
+let upstreamsLoadedOnce = false;
+let upstreamsLoading = false;
+let upstreamSearchQuery = "";
+let upstreamStatusFilterValue = "";
+let upstreamSearchTimer = null;
+
+const BACKOFF_TICK_MS = 1000;
+const MAX_MODEL_CHIPS = 5;
+let backoffTickTimer = null;
+let pageVisible = typeof document.visibilityState === "string"
+  ? document.visibilityState !== "hidden"
+  : true;
+const selectedUpstreamIds = new Set();
+let lastSummarySignature = "";
+
+const upstreamSearchInput = document.querySelector("#upstream-search");
+const liveIndicator = document.querySelector("#live-indicator");
+const densityToggle = document.querySelector("#density-toggle");
+const batchActionsEl = document.querySelector("#upstream-batch-actions");
+const batchEnableBtn = document.querySelector("#batch-enable");
+const batchDisableBtn = document.querySelector("#batch-disable");
+const upstreamSelectAll = document.querySelector("#upstream-select-all");
+const upstreamColMenuBtn = document.querySelector("#upstream-col-menu-btn");
+const upstreamColMenu = document.querySelector("#upstream-col-menu");
+const logColMenuBtn = document.querySelector("#log-col-menu-btn");
+const logColMenu = document.querySelector("#log-col-menu");
+const upstreamTable = document.querySelector("#upstream-table");
+const logTable = document.querySelector("#log-table");
+const upstreamStatusFilter = document.querySelector("#upstream-status-filter");
+const tokenSearchInput = document.querySelector("#token-search");
+const commandPalette = document.querySelector("#command-palette");
+const commandPaletteInput = document.querySelector("#command-palette-input");
+const commandPaletteList = document.querySelector("#command-palette-list");
+const settingsTheme = document.querySelector("#settings-theme");
+const settingsDensity = document.querySelector("#settings-density");
+const settingsLogRefresh = document.querySelector("#settings-log-refresh");
+const settingsDefaultHome = document.querySelector("#settings-default-home");
+const serverSettingsForm = document.querySelector("#server-settings-form");
+const settingsBodyKeepCount = document.querySelector("#settings-body-keep-count");
+const settingsRetentionDays = document.querySelector("#settings-retention-days");
+const settingsBodyMaxBytes = document.querySelector("#settings-body-max-bytes");
+const settingsRevision = document.querySelector("#settings-revision");
+const serverSettingsStatus = document.querySelector("#server-settings-status");
+const rotateAdminTokenButton = document.querySelector("#rotate-admin-token");
+const rotateConfirmDialog = document.querySelector("#rotate-confirm-dialog");
+const rotateConfirmCheck = document.querySelector("#rotate-confirm-check");
+const rotateConfirmCancel = document.querySelector("#rotate-confirm-cancel");
+const rotateConfirmSubmit = document.querySelector("#rotate-confirm-submit");
+const rotatedTokenDialog = document.querySelector("#rotated-token-dialog");
+const rotatedTokenValue = document.querySelector("#rotated-token-value");
+const rotatedTokenCopy = document.querySelector("#rotated-token-copy");
+const rotatedTokenLogout = document.querySelector("#rotated-token-logout");
+const systemRefreshButton = document.querySelector("#system-refresh");
+const systemInfoGrid = document.querySelector("#system-info-grid");
+const modelTestDialog = document.querySelector("#model-test-dialog");
+const modelTestForm = document.querySelector("#model-test-form");
+const modelTestTitle = document.querySelector("#model-test-title");
+const modelTestSummary = document.querySelector("#model-test-summary");
+const modelTestClose = document.querySelector("#model-test-close");
+const modelTestModel = document.querySelector("#model-test-model");
+const modelTestTemplate = document.querySelector("#model-test-template");
+const modelTestPromptTemplate = document.querySelector("#model-test-prompt-template");
+const modelTestTemplateHint = document.querySelector("#model-test-template-hint");
+const modelTestPrompt = document.querySelector("#model-test-prompt");
+const modelTestRefreshModels = document.querySelector("#model-test-refresh-models");
+const modelTestSubmit = document.querySelector("#model-test-submit");
+const modelTestResult = document.querySelector("#model-test-result");
+const modelTestResultStatus = document.querySelector("#model-test-result-status");
+const modelTestResultMeta = document.querySelector("#model-test-result-meta");
+const modelTestResultBody = document.querySelector("#model-test-result-body");
+const modelTestRequestBody = document.querySelector("#model-test-request-body");
+const modelTestResponseBody = document.querySelector("#model-test-response-body");
+const modelTestTemplateList = document.querySelector("#model-test-template-list");
+const newModelTestTemplateButton = document.querySelector("#new-model-test-template");
+const modelTestTemplateDialog = document.querySelector("#model-test-template-dialog");
+const modelTestTemplateForm = document.querySelector("#model-test-template-form");
+const modelTestTemplateClose = document.querySelector("#model-test-template-close");
+const modelTestTemplateCancel = document.querySelector("#model-test-template-cancel");
+const modelTestTemplateId = document.querySelector("#model-test-template-id");
+const modelTestTemplateName = document.querySelector("#model-test-template-name");
+const modelTestTemplateKind = document.querySelector("#model-test-template-kind");
+const modelTestTemplatePrompt = document.querySelector("#model-test-template-prompt");
+let modelTestTemplates = [];
+let modelTestPromptTemplates = [];
+let modelTestUpstream = null;
+
+const modelDialog = document.querySelector("#model-dialog");
+const modelDialogTitle = document.querySelector("#model-dialog-title");
+const modelDialogSummary = document.querySelector("#model-dialog-summary");
+const modelDialogClose = document.querySelector("#model-dialog-close");
+const modelFilter = document.querySelector("#model-filter");
+const modelOptions = document.querySelector("#model-options");
+const modelSelectAllButton = document.querySelector("#model-select-all");
+const modelClearAllButton = document.querySelector("#model-clear-all");
+const modelSaveSelectionButton = document.querySelector("#model-save-selection");
+const modelCancelSelectionButton = document.querySelector("#model-cancel-selection");
+
+const fields = {
+  id: document.querySelector("#upstream-id"),
+  name: document.querySelector("#name"),
+  baseUrl: document.querySelector("#base-url"),
+  apiKey: document.querySelector("#api-key"),
+  modelNames: document.querySelector("#model-names"),
+  modelPrefixes: document.querySelector("#model-prefixes"),
+  modelMappings: document.querySelector("#model-mappings"),
+  priority: document.querySelector("#priority"),
+  timeoutSeconds: document.querySelector("#timeout-seconds"),
+  extraHeaders: document.querySelector("#extra-headers"),
+  enabled: document.querySelector("#enabled"),
+  clearApiKey: document.querySelector("#clear-api-key"),
+};
+let persistedFormApiKey = null;
+
+// ── 令牌管理 ────────────────────────────────────────────────
+const tokenRows = document.querySelector("#token-rows");
+const tokenDialog = document.querySelector("#token-dialog");
+const tokenForm = document.querySelector("#token-form");
+const tokenFormTitle = document.querySelector("#token-form-title");
+const tokenDialogClose = document.querySelector("#token-dialog-close");
+const newTokenButton = document.querySelector("#new-token");
+const tokenResetButton = document.querySelector("#token-reset-form");
+const copyTokenButton = document.querySelector("#copy-token");
+const tokenValueRow = document.querySelector("#token-value-row");
+const tokenNameInput = document.querySelector("#token-name");
+const tokenDescriptionInput = document.querySelector("#token-description");
+const tokenCustomRow = document.querySelector("#token-custom-row");
+const tokenCustomInput = document.querySelector("#token-custom");
+const tokenEnabledCheckbox = document.querySelector("#token-enabled");
+const tokenIdInput = document.querySelector("#token-id");
+const tokenValueDisplay = document.querySelector("#token-value-display");
+
+let tokenRefreshTimer = null;
+let tokens = [];
+let tokensLoadedOnce = false;
+let tokensLoading = false;
+let tokenSearchQuery = "";
+let tokenSearchTimer = null;
+
+let upstreams = [];
+let activeActionMenuButton = null;
+let lastUpstreamLoadError = "";
+const modelDialogState = {
+  upstream: null,
+  mode: "form",
+  models: [],
+  selected: new Set(),
+};
+
+
+function setStatus(message, tone = "neutral", options = {}) {
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.dataset.tone = tone;
+  toast.setAttribute("role", tone === "error" ? "alert" : "status");
+
+  const messageBox = document.createElement("div");
+  messageBox.className = "toast-message";
+  messageBox.textContent = message;
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "toast-close";
+  closeButton.setAttribute("aria-label", "关闭消息");
+  closeButton.title = "关闭";
+  closeButton.textContent = "×";
+
+  let actionButton = null;
+  if (options.actionLabel && typeof options.onAction === "function") {
+    toast.classList.add("has-action");
+    actionButton = document.createElement("button");
+    actionButton.type = "button";
+    actionButton.className = "toast-action";
+    actionButton.textContent = options.actionLabel;
+  }
+
+  if (actionButton) {
+    toast.append(messageBox, actionButton, closeButton);
+  } else {
+    toast.append(messageBox, closeButton);
+  }
+  toastRegion.append(toast);
+  showPopoverLayer(toastRegion, true);
+
+  while (toastRegion.children.length > 4) {
+    toastRegion.firstElementChild.remove();
+  }
+
+  const duration = typeof options.durationMs === "number"
+    ? options.durationMs
+    : tone === "error" ? 6000 : tone === "ok" ? 4000 : 3000;
+  let dismissTimer = window.setTimeout(() => dismissToast(toast), duration);
+  const restartTimer = () => {
+    window.clearTimeout(dismissTimer);
+    dismissTimer = window.setTimeout(() => dismissToast(toast), duration);
+  };
+
+  toast.addEventListener("mouseenter", () => window.clearTimeout(dismissTimer));
+  toast.addEventListener("mouseleave", restartTimer);
+  closeButton.addEventListener("click", () => {
+    window.clearTimeout(dismissTimer);
+    dismissToast(toast);
+  });
+  if (actionButton) {
+    actionButton.addEventListener("click", async () => {
+      window.clearTimeout(dismissTimer);
+      actionButton.disabled = true;
+      try {
+        await options.onAction();
+      } finally {
+        dismissToast(toast);
+      }
+    });
+  }
+}
+
+function dismissToast(toast) {
+  if (!toast.isConnected || toast.classList.contains("is-leaving")) {
+    return;
+  }
+  toast.classList.add("is-leaving");
+  window.setTimeout(() => {
+    toast.remove();
+    if (toastRegion.children.length === 0) {
+      hidePopoverLayer(toastRegion);
+    }
+  }, 180);
+}
+
+function requestConfirm({
+  title = "确认操作",
+  message = "",
+  confirmLabel = "删除",
+  cancelLabel = "取消",
+  danger = true,
+} = {}) {
+  return new Promise((resolve) => {
+    if (!confirmDialog) {
+      resolve(window.confirm(message || title));
+      return;
+    }
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      confirmOk.removeEventListener("click", onOk);
+      confirmCancel.removeEventListener("click", onCancel);
+      confirmClose.removeEventListener("click", onCancel);
+      confirmDialog.removeEventListener("cancel", onCancelEvent);
+      confirmDialog.removeEventListener("click", onBackdrop);
+      if (confirmDialog.open && typeof confirmDialog.close === "function") {
+        confirmDialog.close();
+      } else {
+        confirmDialog.removeAttribute("open");
+      }
+      resolve(value);
+    };
+
+    const onOk = (event) => {
+      event.preventDefault();
+      finish(true);
+    };
+    const onCancel = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+    const onCancelEvent = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+    const onBackdrop = (event) => {
+      if (event.target === confirmDialog) {
+        finish(false);
+      }
+    };
+
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    confirmOk.textContent = confirmLabel;
+    confirmCancel.textContent = cancelLabel;
+    confirmOk.classList.toggle("danger", danger);
+    confirmOk.classList.toggle("secondary", !danger);
+
+    confirmOk.addEventListener("click", onOk);
+    confirmCancel.addEventListener("click", onCancel);
+    confirmClose.addEventListener("click", onCancel);
+    confirmDialog.addEventListener("cancel", onCancelEvent);
+    confirmDialog.addEventListener("click", onBackdrop);
+
+    if (typeof confirmDialog.showModal === "function") {
+      confirmDialog.showModal();
+    } else {
+      confirmDialog.setAttribute("open", "");
+    }
+    confirmOk.focus();
+  });
+}
+
+function popoverIsOpen(element) {
+  return typeof element.showPopover === "function" && element.matches(":popover-open");
+}
+
+function showPopoverLayer(element, bringToFront = false) {
+  element.hidden = false;
+  if (typeof element.showPopover !== "function") {
+    return;
+  }
+  try {
+    if (bringToFront && popoverIsOpen(element)) {
+      element.hidePopover();
+    }
+    if (!popoverIsOpen(element)) {
+      element.showPopover();
+    }
+  } catch {
+    // The fixed-position fallback remains visible when Popover API is unavailable.
+  }
+}
+
+function hidePopoverLayer(element) {
+  if (popoverIsOpen(element)) {
+    element.hidePopover();
+  }
+  element.hidden = true;
+}
+
+function splitList(value) {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinList(value) {
+  return (value || []).join(", ");
+}
+
+function parseModelMappings(value) {
+  const mappings = {};
+  for (const line of value.split(/\n/)) {
+    const clean = line.trim();
+    if (!clean) {
+      continue;
+    }
+    const match = clean.match(/^(.+?)(?:=>|=|:)(.+)$/);
+    if (!match) {
+      throw new Error(`模型映射格式错误：${clean}`);
+    }
+    const downstream = match[1].trim();
+    const upstream = match[2].trim();
+    if (downstream && upstream) {
+      mappings[downstream] = upstream;
+    }
+  }
+  return mappings;
+}
+
+function joinModelMappings(value) {
+  return Object.entries(value || {})
+    .map(([downstream, upstream]) => `${downstream} => ${upstream}`)
+    .join("\n");
+}
+
+function uniqueList(items) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items || []) {
+    const clean = String(item).trim();
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      result.push(clean);
+    }
+  }
+  return result;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[char];
+  });
+}
+
+function renderIcon(name) {
+  if (name === "copy") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+        <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+      </svg>
+    `;
+  }
+  if (name === "open") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M14 5h5v5"></path>
+        <path d="M10 14 19 5"></path>
+        <path d="M19 14v3a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3"></path>
+      </svg>
+    `;
+  }
+  return "";
+}
+
+function renderBaseUrlCell(upstream) {
+  const baseUrl = escapeHtml(upstream.base_url);
+  const name = escapeHtml(upstream.name);
+  return `
+    <div class="url-cell-inner">
+      <code title="${baseUrl}">${baseUrl}</code>
+      <span class="url-cell-actions" aria-label="Base URL 操作">
+        <button
+          type="button"
+          class="secondary ghost url-action"
+          data-url-action="copy"
+          data-base-url="${baseUrl}"
+          aria-label="复制 ${name} 的 Base URL"
+          title="复制 Base URL"
+        >${renderIcon("copy")}</button>
+        <button
+          type="button"
+          class="secondary ghost url-action"
+          data-url-action="open"
+          data-base-url="${baseUrl}"
+          aria-label="打开 ${name} 的 Base URL"
+          title="打开 Base URL"
+        >${renderIcon("open")}</button>
+      </span>
+    </div>
+  `;
+}
+
+function normalizeHttpUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function modelMatchItems(upstream) {
+  return [
+    ...Object.entries(upstream.model_mappings || {}).map(([downstream, upstreamModel]) => ({
+      label: `${downstream}=>${upstreamModel}`,
+      type: "mapping",
+    })),
+    ...upstream.model_names.map((value) => ({ label: value, type: "name" })),
+    ...upstream.model_prefixes.map((value) => ({ label: `${value}*`, type: "prefix" })),
+  ];
+}
+
+function renderModelMatches(upstream) {
+  const items = modelMatchItems(upstream);
+  if (items.length === 0) {
+    return '<span class="muted">默认候选</span>';
+  }
+  const visible = items.slice(0, MAX_MODEL_CHIPS);
+  const hiddenCount = items.length - visible.length;
+  const title = items.map((item) => item.label).join(", ");
+  const chips = visible
+    .map((item) => (
+      `<span class="model-chip ${escapeHtml(item.type)}">${escapeHtml(item.label)}</span>`
+    ))
+    .join("");
+  const more = hiddenCount > 0 ? `<span class="model-chip more">+${hiddenCount}</span>` : "";
+  return `<div class="model-chip-list" title="${escapeHtml(title)}">${chips}${more}</div>`;
+}
+
+function renderUpstreamSummary() {
+  scheduleRenderUpstreamSummary();
+}
+
+function renderUpstreamSummaryCore() {
+  if (!upstreamSummary) {
+    return;
+  }
+  const total = upstreams.length;
+  const enabled = upstreams.filter((upstream) => upstream.enabled).length;
+  const disabled = total - enabled;
+  const backedOff = upstreams.filter((upstream) => liveBackoffSeconds(upstream) > 0).length;
+
+  const signature = [total, enabled, disabled, backedOff].join("|");
+  if (signature === lastSummarySignature) {
+    return;
+  }
+  lastSummarySignature = signature;
+
+  const backoffHint = backedOff > 0
+    ? `<span class="summary-hint">退避结束后自动恢复路由</span>`
+    : "";
+
+  upstreamSummary.innerHTML = `
+    <span><strong>${total}</strong>渠道总数</span>
+    <span><strong>${enabled}</strong>启用</span>
+    <span><strong>${disabled}</strong>停用</span>
+    <span class="${backedOff ? "summary-warn" : ""}"><strong>${backedOff}</strong>退避中${backoffHint}</span>
+  `;
+}
+
+function debounce(fn, wait = 150) {
+  let timer = null;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
+}
+
+// ── Density / column prefs / health / charts ─────────────
+
+const DEFAULT_UPSTREAM_COLUMNS = {
+  check: true,
+  id: true,
+  name: true,
+  base_url: true,
+  models: true,
+  priority: true,
+  status: true,
+  actions: true,
+};
+
+const DEFAULT_LOG_COLUMNS = {
+  time: true,
+  channel: true,
+  token: true,
+  client: true,
+  model: true,
+  reasoning: true,
+  status: true,
+  duration: true,
+  tokens: true,
+};
+
+const UPSTREAM_LOCKED_COLS = new Set(["check", "id", "name", "actions"]);
+const LOG_LOCKED_COLS = new Set(["time", "status"]);
+
+const UPSTREAM_COL_LABELS = {
+  check: "选择",
+  id: "ID",
+  name: "名称",
+  base_url: "Base URL",
+  models: "模型匹配",
+  priority: "优先级",
+  status: "状态",
+  actions: "操作",
+};
+
+const LOG_COL_LABELS = {
+  time: "时间",
+  channel: "渠道",
+  token: "令牌",
+  client: "客户端",
+  model: "模型",
+  reasoning: "思考强度",
+  status: "状态码",
+  duration: "耗时",
+  tokens: "Tokens",
+};
+
+function readJsonStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return { ...fallback };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { ...fallback };
+    return { ...fallback, ...parsed };
+  } catch {
+    return { ...fallback };
+  }
+}
+
+function writeJsonStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* ignore */
+  }
+}
+
+function getDensity() {
+  try {
+    const value = localStorage.getItem(DENSITY_KEY);
+    return value === "compact" ? "compact" : "comfortable";
+  } catch {
+    return "comfortable";
+  }
+}
+
+function applyDensity(density) {
+  const next = density === "compact" ? "compact" : "comfortable";
+  document.documentElement.setAttribute("data-density", next);
+  try {
+    localStorage.setItem(DENSITY_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  if (densityToggle) {
+    densityToggle.setAttribute(
+      "aria-label",
+      next === "compact" ? "切换到舒适密度" : "切换到紧凑密度",
+    );
+    densityToggle.title = next === "compact" ? "当前：紧凑 · 点击切换" : "当前：舒适 · 点击切换";
+    const label = densityToggle.querySelector(".density-toggle-label");
+    if (label) label.textContent = next === "compact" ? "紧凑" : "舒适";
+  }
+  if (typeof updatePreferenceControls === "function") updatePreferenceControls();
+}
+
+function cycleDensity() {
+  applyDensity(getDensity() === "compact" ? "comfortable" : "compact");
+}
+
+let upstreamColumns = readJsonStorage(UPSTREAM_COLUMNS_KEY, DEFAULT_UPSTREAM_COLUMNS);
+let logColumns = readJsonStorage(LOG_COLUMNS_KEY, DEFAULT_LOG_COLUMNS);
+let upstreamSort = { key: "priority", direction: "desc" };
+
+function applyColumnVisibility(table, columns, prefix) {
+  if (!table) return;
+  for (const key of Object.keys(columns)) {
+    table.classList.toggle(`col-hide-${key}`, columns[key] === false);
+  }
+}
+
+function applyAllColumnVisibility() {
+  applyColumnVisibility(upstreamTable, upstreamColumns, "upstream");
+  applyColumnVisibility(logTable, logColumns, "log");
+}
+
+function renderColumnMenu(menu, columns, labels, locked, storageKey, table) {
+  if (!menu) return;
+  menu.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+  for (const [key, label] of Object.entries(labels)) {
+    const row = document.createElement("label");
+    row.className = locked.has(key) ? "is-locked" : "";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = columns[key] !== false;
+    input.disabled = locked.has(key);
+    input.dataset.colKey = key;
+    const text = document.createElement("span");
+    text.textContent = label + (locked.has(key) ? "（固定）" : "");
+    row.append(input, text);
+    if (!locked.has(key)) {
+      input.addEventListener("change", () => {
+        columns[key] = input.checked;
+        writeJsonStorage(storageKey, columns);
+        applyColumnVisibility(table, columns);
+      });
+    }
+    fragment.append(row);
+  }
+  menu.append(fragment);
+}
+
+function closeColMenus() {
+  if (upstreamColMenu) {
+    upstreamColMenu.hidden = true;
+    upstreamColMenuBtn?.setAttribute("aria-expanded", "false");
+  }
+  if (logColMenu) {
+    logColMenu.hidden = true;
+    logColMenuBtn?.setAttribute("aria-expanded", "false");
+  }
+}
+
+function toggleColMenu(menu, button) {
+  if (!menu || !button) return;
+  const open = menu.hidden;
+  closeColMenus();
+  if (open) {
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+  }
+}
+
+function formatBackoffNote(seconds) {
+  if (!seconds) return "";
+  return `退避中 · 剩 ${seconds}s · 自动恢复后参与路由`;
+}

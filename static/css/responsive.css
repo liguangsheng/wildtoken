@@ -1,0 +1,551 @@
+/* ── Responsive ──────────────────────────────────────────── */
+
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+  }
+
+  body {
+    font-size: 13px;
+  }
+
+  .app-shell {
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    gap: 8px;
+    min-height: 52px;
+    padding: 0 10px 0 12px;
+  }
+
+  .brand-label {
+    display: none;
+  }
+
+  .topbar-brand h1 {
+    font-size: 15px;
+  }
+
+  .topbar-nav {
+    gap: 1px;
+  }
+
+  .nav-link {
+    min-height: 26px;
+    min-width: 48px;
+    padding: 0 10px;
+  }
+
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .nav-logout {
+    min-height: 28px;
+    min-width: max-content;
+    padding: 0 8px;
+  }
+
+  .theme-toggle {
+    min-height: 30px;
+    min-width: 30px;
+    width: 30px;
+  }
+
+  .content {
+    padding: 12px 10px 28px;
+    width: 100%;
+  }
+
+  .view,
+  .panel {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .panel {
+    margin-top: 12px;
+    padding: 12px;
+  }
+
+  .panel h2 {
+    font-size: 18px;
+    line-height: 1.2;
+  }
+
+  .panel h2,
+  .panel p,
+  .modal-head h2,
+  .modal-head p,
+  .form-section-head p,
+  .field-hint,
+  .section-copy {
+    overflow-wrap: anywhere;
+  }
+
+  .panel-head {
+    border-bottom: 0;
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 0;
+  }
+
+  .panel-head .actions {
+    justify-content: stretch;
+    margin-top: 0;
+    width: 100%;
+  }
+
+  .actions {
+    gap: 8px;
+  }
+
+  .panel-head .actions button,
+  .modal-actions button,
+  .modal-footer button,
+  .pager button {
+    flex: 1 1 0;
+    min-width: min(140px, 100%);
+  }
+
+  .summary-strip {
+    display: grid;
+    gap: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-strip span {
+    border-bottom: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    white-space: normal;
+  }
+
+  .summary-strip span:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .summary-strip span:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .status {
+    overflow-wrap: anywhere;
+  }
+
+  .log-toolbar {
+    align-items: stretch;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    margin-top: 0;
+    width: 100%;
+  }
+
+  .log-toolbar > button {
+    grid-column: 1 / -1;
+    min-width: 72px;
+  }
+
+  .log-filter {
+    min-width: 0;
+  }
+
+  .log-filter select,
+  .log-filter input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .view-toolbar {
+    align-items: stretch;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .filter-field input,
+  .filter-field select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .command-palette-dialog {
+    max-width: calc(100vw - 16px);
+    top: 12vh;
+    width: calc(100vw - 16px);
+  }
+
+
+  .pager {
+    justify-content: stretch;
+  }
+
+  .grid-form {
+    grid-template-columns: minmax(0, 1fr);
+    margin-top: 14px;
+  }
+
+  .table-wrap {
+    max-width: 100%;
+  }
+
+  th,
+  td {
+    padding: 9px 10px;
+  }
+
+  .model-chip-list {
+    max-width: none;
+  }
+
+  .model-chip {
+    max-width: 150px;
+  }
+
+  .upstream-dialog,
+  .model-dialog,
+  .log-detail-dialog,
+  .quick-import-dialog,
+  .admin-token-dialog,
+  .balance-dialog,
+  .confirm-dialog,
+  .command-palette-dialog {
+    margin: auto;
+    max-height: min(720px, calc(100dvh - 16px));
+    max-width: calc(100vw - 16px);
+    overflow: hidden;
+    width: calc(100vw - 16px);
+  }
+
+
+  .upstream-dialog-panel {
+    max-height: min(720px, calc(100dvh - 16px));
+  }
+
+  .model-dialog-panel,
+  .log-detail-panel,
+  .quick-import-panel,
+  .admin-token-panel,
+  .balance-panel,
+  .confirm-panel {
+    max-height: min(720px, calc(100dvh - 16px));
+    overflow: auto;
+    padding: 14px;
+  }
+
+  .upstream-modal-head,
+  .upstream-dialog-body,
+  .modal-footer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .upstream-modal-head {
+    padding-top: 14px;
+  }
+
+  .upstream-dialog-body {
+    gap: 14px;
+    padding-bottom: 16px;
+    padding-top: 14px;
+  }
+
+  .modal-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .modal-head h2 {
+    font-size: 18px;
+  }
+
+  .form-section-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .form-grid,
+  .toggle-list,
+  .request-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .field,
+  .grid-form label,
+  .quick-import-panel .field,
+  .admin-token-panel .field,
+  .model-toolbar .field {
+    min-width: 0;
+  }
+
+  .modal-footer {
+    align-items: stretch;
+    bottom: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    position: sticky;
+  }
+
+  .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .row-actions {
+    white-space: normal;
+  }
+
+  .token-triple {
+    grid-template-columns: repeat(3, minmax(66px, 1fr));
+    max-width: none;
+  }
+
+  .toast-region {
+    inset: calc(8px + env(safe-area-inset-top)) 8px auto 8px;
+    width: auto;
+  }
+
+  .toast {
+    grid-template-columns: minmax(0, 1fr) 28px;
+  }
+
+  .model-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-toolbar-actions {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .model-toolbar-actions button {
+    width: 100%;
+  }
+
+  .model-options {
+    max-height: min(420px, 48dvh);
+  }
+
+  .log-detail-section {
+    min-width: 0;
+  }
+
+  .log-detail-head {
+    padding: 12px;
+  }
+
+  .log-detail-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .log-detail-meta-card strong,
+  .log-detail-meta-card small {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .log-detail-sections-head {
+    align-items: stretch;
+  }
+
+  .log-detail-section summary {
+    gap: 10px;
+    min-height: 52px;
+    padding: 10px 12px;
+  }
+
+  .log-detail-code-frame {
+    padding: 6px;
+  }
+
+  .request-detail-grid pre {
+    font-size: 11px;
+    max-height: 48dvh;
+    min-height: 160px;
+    padding: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .balance-row {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .balance-row .value {
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  .upstream-action-menu {
+    max-width: calc(100vw - 16px);
+  }
+
+  .token-preview-button {
+    max-width: 100%;
+  }
+
+  .token-preview-code {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .action-cell {
+    min-width: 160px;
+    white-space: normal;
+  }
+
+  .action-cell button {
+    margin: 0 4px 4px 0;
+  }
+
+  .token-value-box {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .token-value-box code {
+    min-width: 0;
+  }
+
+  .token-copy-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .content {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .topbar-brand h1 {
+    font-size: 14px;
+  }
+
+  .brand-mark {
+    height: 20px;
+    width: 20px;
+  }
+
+  .nav-link {
+    min-width: 44px;
+    padding: 0 8px;
+  }
+
+  .nav-logout {
+    padding: 0 8px;
+  }
+
+  .panel {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .summary-strip,
+  .log-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .summary-strip span {
+    border-right: 0;
+  }
+
+  .summary-strip span:nth-last-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .summary-strip span:last-child {
+    border-bottom: 0;
+  }
+
+  .log-toolbar > button,
+  .modal-footer button {
+    width: 100%;
+  }
+
+  .modal-footer {
+    flex-direction: column;
+  }
+
+  .token-triple {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .log-detail-panel {
+    padding: 12px 10px;
+  }
+
+  .log-detail-head,
+  .log-detail-meta-card {
+    padding: 10px;
+  }
+
+  .log-detail-section summary {
+    grid-template-columns: minmax(0, 1fr) 26px;
+  }
+
+  .log-detail-summary-state {
+    height: 26px;
+    width: 26px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .aurora-blob {
+    animation: none !important;
+  }
+
+  .toast,
+  .toast.is-leaving,
+  .panel,
+  .upstream-dialog,
+  .model-dialog,
+  .log-detail-dialog,
+  .quick-import-dialog,
+  .admin-token-dialog,
+  .balance-dialog,
+  .confirm-dialog,
+  .command-palette-dialog,
+  .command-palette-panel {
+    animation: none !important;
+  }
+
+
+  .status-toggle.on .status-dot {
+    animation: none !important;
+  }
+
+  .status-switch-track,
+  .status-switch-thumb {
+    transition: none !important;
+  }
+}
