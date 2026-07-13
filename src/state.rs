@@ -127,6 +127,7 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             upstream_name       TEXT,
             model               TEXT,
             reasoning_effort    TEXT,
+            response_reasoning_effort TEXT,
             stream              INTEGER NOT NULL DEFAULT 0,
             status_code         INTEGER,
             prompt_tokens       INTEGER,
@@ -149,6 +150,7 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "downstream_token_id INTEGER REFERENCES api_tokens(id) ON DELETE SET NULL",
         "downstream_token_name TEXT",
         "client_type TEXT NOT NULL DEFAULT 'unknown'",
+        "response_reasoning_effort TEXT",
     ] {
         let column = definition
             .split_whitespace()
@@ -166,6 +168,20 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 .await?;
         }
     }
+
+    sqlx::query(
+        r#"UPDATE request_logs
+           SET response_reasoning_effort = CASE
+               WHEN upstream_response LIKE '%"effort":"minimal"%' THEN 'minimal'
+               WHEN upstream_response LIKE '%"effort":"low"%' THEN 'low'
+               WHEN upstream_response LIKE '%"effort":"medium"%' THEN 'medium'
+               WHEN upstream_response LIKE '%"effort":"high"%' THEN 'high'
+               WHEN upstream_response LIKE '%"effort":"max"%' THEN 'max'
+           END
+           WHERE response_reasoning_effort IS NULL"#,
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         r#"UPDATE request_logs

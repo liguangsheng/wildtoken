@@ -16,6 +16,7 @@ pub struct LogEntry {
     pub upstream_name: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub response_reasoning_effort: Option<String>,
     pub stream: bool,
     pub status_code: Option<i32>,
     pub prompt_tokens: Option<i32>,
@@ -235,14 +236,14 @@ async fn insert_log_entry(
         r#"INSERT INTO request_logs
             (method, path, downstream_token_id, downstream_token_name, client_type,
              upstream_id, upstream_name, model,
-             reasoning_effort, stream, status_code,
+             reasoning_effort, response_reasoning_effort, stream, status_code,
              prompt_tokens, completion_tokens, total_tokens,
              duration_ms, first_token_ms, error,
              downstream_request, upstream_request,
              upstream_response, downstream_response,
              created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, datetime('now'))"#,
+                ?, ?, ?, ?, ?, ?, datetime('now'))"#,
     )
     .bind(&entry.method)
     .bind(&entry.path)
@@ -253,6 +254,7 @@ async fn insert_log_entry(
     .bind(&entry.upstream_name)
     .bind(&entry.model)
     .bind(&entry.reasoning_effort)
+    .bind(&entry.response_reasoning_effort)
     .bind(stream_int)
     .bind(entry.status_code)
     .bind(entry.prompt_tokens)

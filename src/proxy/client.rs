@@ -328,6 +328,38 @@ fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
     None
 }
 
+fn extract_response_reasoning_effort(raw_body: &[u8], content_type: &str) -> Option<String> {
+    fn from_value(value: &serde_json::Value) -> Option<String> {
+        value
+            .get("response")
+            .unwrap_or(value)
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+            .map(str::to_string)
+    }
+
+    if content_type.contains("event-stream") || raw_body.starts_with(b"data:") {
+        for line in std::str::from_utf8(raw_body).ok()?.lines() {
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(data.trim()) {
+                if let Some(effort) = from_value(&value) {
+                    return Some(effort);
+                }
+            }
+        }
+        None
+    } else {
+        serde_json::from_slice::<serde_json::Value>(raw_body)
+            .ok()
+            .and_then(|value| from_value(&value))
+    }
+}
+
 /// Prepare a JSON request body for its selected upstream.
 ///
 /// Streaming Chat Completions responses omit usage by default on many
@@ -583,6 +615,7 @@ pub async fn proxy_request(
 
     let (prompt_tokens, completion_tokens, total_tokens) =
         extract_usage(&body_bytes, &content_type);
+    let response_reasoning_effort = extract_response_reasoning_effort(&body_bytes, &content_type);
 
     let elapsed = start.elapsed();
     let is_stream = body_bytes.starts_with(b"data:") || content_type.contains("event-stream");
@@ -605,6 +638,7 @@ pub async fn proxy_request(
         upstream_name: Some(upstream.name.clone()),
         model: forward_model.map(|s| s.to_string()),
         reasoning_effort,
+        response_reasoning_effort,
         stream: is_stream,
         status_code: Some(status_u16 as i32),
         prompt_tokens,

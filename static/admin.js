@@ -2813,6 +2813,20 @@ function formatStatusBadge(statusCode) {
   return `<span class="badge neutral">${statusCode}</span>`;
 }
 
+function formatReasoningEffort(requestEffort, responseEffort, options = {}) {
+  const { badge = true, fallback = '<span class="muted">-</span>' } = options;
+  if (!requestEffort && !responseEffort) {
+    return fallback;
+  }
+
+  const values = requestEffort === responseEffort
+    ? [requestEffort]
+    : [requestEffort, responseEffort].filter(Boolean);
+  const escapedValues = values.map(escapeHtml);
+  const value = escapedValues.join(" → ");
+  return badge ? `<span class="badge neutral">${value}</span>` : value;
+}
+
 function renderLogRows(items, options = {}) {
   const {
     emptyTitle = "暂无请求日志",
@@ -2876,9 +2890,7 @@ function renderLogRows(items, options = {}) {
       <td data-col="client"><span class="badge neutral">${escapeHtml(log.client_type || "unknown")}</span></td>
       <td class="model-cell" data-col="model">${log.model ? `<code title="${escapeHtml(log.model)}">${escapeHtml(log.model)}</code>` : "<span class=\"muted\">-</span>"}</td>
       <td class="col-reasoning" data-col="reasoning">
-        ${log.reasoning_effort
-          ? `<span class="badge neutral">${escapeHtml(log.reasoning_effort)}</span>`
-          : "<span class=\"muted\">-</span>"}
+        ${formatReasoningEffort(log.reasoning_effort, log.response_reasoning_effort)}
       </td>
       <td data-col="status">${status}</td>
       <td class="duration-cell" data-col="duration">
@@ -3080,7 +3092,7 @@ function formatLogDetailMeta(detail) {
         : "neutral";
   const tokenParts = [detail.prompt_tokens, detail.completion_tokens, detail.total_tokens]
     .map((value) => (value === null || value === undefined ? "-" : value));
-  const reasoning = detail.reasoning_effort || "-";
+  const reasoning = formatReasoningEffort(detail.reasoning_effort, detail.response_reasoning_effort, { badge: false, fallback: "-" });
   const streamLabel = detail.stream ? "流式" : "非流式";
   const extractedError = extractLogDetailError(detail);
   const statusErrorLine = extractedError
@@ -3109,7 +3121,7 @@ function formatLogDetailMeta(detail) {
     <div class="log-detail-meta-card">
       <span class="log-detail-meta-label">请求</span>
       <strong>${escapeHtml(detail.method)} /${escapeHtml(detail.path)}</strong>
-      <small>${escapeHtml(streamLabel)} · 思考强度 ${escapeHtml(reasoning)}</small>
+      <small>${escapeHtml(streamLabel)} · 思考强度 ${reasoning}</small>
     </div>
     <div class="log-detail-meta-card">
       <span class="log-detail-meta-label">状态与耗时</span>
