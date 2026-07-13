@@ -116,6 +116,7 @@ let lastDashboardLoadError = "";
 const dashboardScope = document.querySelector("#dashboard-scope");
 const dashboardRefreshButton = document.querySelector("#dashboard-refresh");
 const dashboardKpis = document.querySelector("#dashboard-kpis");
+const dashboardTokenKpis = document.querySelector("#dashboard-token-kpis");
 const dashboardStatusChart = document.querySelector("#dashboard-status-chart");
 const dashboardStatusMeta = document.querySelector("#dashboard-status-meta");
 const dashboardLatencyChart = document.querySelector("#dashboard-latency-chart");
@@ -845,6 +846,17 @@ function tokenUsageCard(label, usage, scopeLabel) {
   };
 }
 
+function renderDashboardKpiCards(container, cards) {
+  if (!container) return;
+  container.innerHTML = cards.map((card) => `
+    <div class="dashboard-kpi ${card.tone}">
+      <div class="dashboard-kpi-value">${escapeHtml(card.value)}</div>
+      <div class="dashboard-kpi-label">${escapeHtml(card.label)}</div>
+      <div class="dashboard-kpi-hint">${escapeHtml(card.hint)}</div>
+    </div>
+  `).join("");
+}
+
 function buildSparklineSvg(values, { width = 240, height = 44 } = {}) {
   if (!values.length) {
     return '<div class="dashboard-chart-empty">暂无耗时数据</div>';
@@ -965,55 +977,45 @@ function renderDashboard() {
       : "基于已加载的近窗日志与渠道状态 · 非全库实时统计";
   }
 
-  if (dashboardKpis) {
-    const errorTone = n === 0
-      ? ""
-      : errorCount / n >= 0.2
-        ? "tone-danger"
-        : errorCount / n >= 0.05
-          ? "tone-warn"
-          : "tone-ok";
-    const tokenUsageCards = [
-      tokenUsageCard("今天 Tokens", dashboardTokenUsage?.today, "本地日累计"),
-      tokenUsageCard("1d Tokens", dashboardTokenUsage?.one_day, "最近 24 小时"),
-      tokenUsageCard("7d Tokens", dashboardTokenUsage?.seven_days, "最近 7 天"),
-      tokenUsageCard("30d Tokens", dashboardTokenUsage?.thirty_days, "最近 30 天"),
-    ];
-    const cards = [
-      {
-        value: String(n),
-        label: "近窗请求",
-        hint: n ? "已加载日志条数" : "暂无近窗数据",
-        tone: "",
-      },
-      {
-        value: errorRateLabel,
-        label: "错误率",
-        hint: n ? `${errorCount} / ${n} 条失败` : "暂无日志",
-        tone: errorTone,
-      },
-      {
-        value: avgDurationLabel,
-        label: "平均耗时",
-        hint: durationCount ? `有效 ${durationCount} 条` : "暂无耗时",
-        tone: "",
-      },
-      {
-        value: `${enabledCount}/${totalChannels}`,
-        label: "启用渠道",
-        hint: totalChannels ? `停用 ${disabledCount}` : "暂无渠道",
-        tone: "",
-      },
-      ...tokenUsageCards,
-    ];
-    dashboardKpis.innerHTML = cards.map((card) => `
-      <div class="dashboard-kpi ${card.tone}">
-        <div class="dashboard-kpi-value">${escapeHtml(card.value)}</div>
-        <div class="dashboard-kpi-label">${escapeHtml(card.label)}</div>
-        <div class="dashboard-kpi-hint">${escapeHtml(card.hint)}</div>
-      </div>
-    `).join("");
-  }
+  const errorTone = n === 0
+    ? ""
+    : errorCount / n >= 0.2
+      ? "tone-danger"
+      : errorCount / n >= 0.05
+        ? "tone-warn"
+        : "tone-ok";
+  renderDashboardKpiCards(dashboardKpis, [
+    {
+      value: String(n),
+      label: "近窗请求",
+      hint: n ? "已加载日志条数" : "暂无近窗数据",
+      tone: "",
+    },
+    {
+      value: errorRateLabel,
+      label: "错误率",
+      hint: n ? `${errorCount} / ${n} 条失败` : "暂无日志",
+      tone: errorTone,
+    },
+    {
+      value: avgDurationLabel,
+      label: "平均耗时",
+      hint: durationCount ? `有效 ${durationCount} 条` : "暂无耗时",
+      tone: "",
+    },
+    {
+      value: `${enabledCount}/${totalChannels}`,
+      label: "启用渠道",
+      hint: totalChannels ? `停用 ${disabledCount}` : "暂无渠道",
+      tone: "",
+    },
+  ]);
+  renderDashboardKpiCards(dashboardTokenKpis, [
+    tokenUsageCard("今天 Tokens", dashboardTokenUsage?.today, "本地日累计"),
+    tokenUsageCard("1d Tokens", dashboardTokenUsage?.one_day, "最近 24 小时"),
+    tokenUsageCard("7d Tokens", dashboardTokenUsage?.seven_days, "最近 7 天"),
+    tokenUsageCard("30d Tokens", dashboardTokenUsage?.thirty_days, "最近 30 天"),
+  ]);
 
   const { c2, c4, c5, cOther } = countStatusBuckets(items);
   if (dashboardStatusMeta) {
