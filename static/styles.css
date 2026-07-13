@@ -963,7 +963,7 @@ th {
 
 .table-sort-button:hover,
 .table-sort-button:focus-visible {
-  background: var(--panel-muted);
+  background: transparent;
   box-shadow: none;
   color: var(--text);
 }
