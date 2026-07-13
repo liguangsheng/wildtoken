@@ -9,7 +9,7 @@ use crate::{
         upstream::UpstreamRow,
     },
     proxy::matcher::BackoffManager,
-    state::{init_db, AdminAuthCache, AppState},
+    state::{init_db, AdminAuthCache, AppState, RuntimeMetrics},
 };
 use axum::{
     http::{HeaderMap, HeaderValue},
@@ -245,6 +245,7 @@ async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
         })),
         admin_credential_version: Arc::new(AtomicI64::new(1)),
         admin_auth_cache: Arc::new(AdminAuthCache::new()),
+        runtime_metrics: Arc::new(RuntimeMetrics::new()),
         started_at: Instant::now(),
     };
     let upstream = upstream_with_headers(

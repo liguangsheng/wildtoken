@@ -113,6 +113,36 @@ pub struct RuntimeLogSettingsSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RuntimeCleanupMetricsOut {
+    pub active: bool,
+    pub runs_total: u64,
+    pub errors_total: u64,
+    pub rows_cleared_total: u64,
+    pub batches_total: u64,
+    pub current_rows_cleared: u64,
+    pub current_batches: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_started_unix_seconds: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_finished_unix_seconds: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_duration_ms: Option<u64>,
+    pub last_rows_cleared: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RuntimeMetricsOut {
+    pub active_sse_streams: u64,
+    pub sse_completed_total: u64,
+    pub sse_client_disconnects_total: u64,
+    pub sse_recent_disconnects_10m: u64,
+    pub sse_upstream_errors_total: u64,
+    pub log_write_failures_total: u64,
+    pub slow_db_operations_total: u64,
+    pub cleanup: RuntimeCleanupMetricsOut,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SystemInfoOut {
     pub service: &'static str,
     pub version: &'static str,
@@ -128,6 +158,7 @@ pub struct SystemInfoOut {
     pub total_upstream_count: i64,
     pub recent_one_minute_log_count: i64,
     pub runtime_log_settings: RuntimeLogSettingsSummary,
+    pub runtime_metrics: RuntimeMetricsOut,
 }
 
 pub const DEFAULT_LOG_BODY_KEEP_COUNT: i64 = 100;

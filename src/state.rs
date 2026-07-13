@@ -1,9 +1,10 @@
 use std::{
+    collections::VecDeque,
     sync::{
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use hmac::{Hmac, Mac};
@@ -26,6 +27,15 @@ const CLIENT_TYPE_BACKFILL: &str = "request_logs_client_type_v1";
 const REQUEST_LOG_PAYLOADS_MIGRATION: &str = "request_log_payloads_v1";
 
 type AdminTokenMac = Hmac<Sha256>;
+
+const SSE_RECENT_DISCONNECT_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+fn unix_seconds_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 async fn backfill_response_reasoning_effort_once(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
@@ -228,6 +238,211 @@ pub(crate) struct AdminAuthCache {
     argon2_verifications: std::sync::atomic::AtomicU64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuntimeMetricsSnapshot {
+    pub active_sse_streams: u64,
+    pub sse_completed_total: u64,
+    pub sse_client_disconnects_total: u64,
+    pub sse_recent_disconnects_10m: u64,
+    pub sse_upstream_errors_total: u64,
+    pub log_write_failures_total: u64,
+    pub slow_db_operations_total: u64,
+    pub cleanup_active: bool,
+    pub cleanup_runs_total: u64,
+    pub cleanup_errors_total: u64,
+    pub cleanup_rows_cleared_total: u64,
+    pub cleanup_batches_total: u64,
+    pub cleanup_current_rows_cleared: u64,
+    pub cleanup_current_batches: u64,
+    pub cleanup_last_started_unix_seconds: Option<i64>,
+    pub cleanup_last_finished_unix_seconds: Option<i64>,
+    pub cleanup_last_duration_ms: Option<u64>,
+    pub cleanup_last_rows_cleared: u64,
+}
+
+pub struct RuntimeMetrics {
+    active_sse_streams: AtomicU64,
+    sse_completed_total: AtomicU64,
+    sse_client_disconnects_total: AtomicU64,
+    sse_upstream_errors_total: AtomicU64,
+    log_write_failures_total: AtomicU64,
+    slow_db_operations_total: AtomicU64,
+    cleanup_active: AtomicBool,
+    cleanup_runs_total: AtomicU64,
+    cleanup_errors_total: AtomicU64,
+    cleanup_rows_cleared_total: AtomicU64,
+    cleanup_batches_total: AtomicU64,
+    cleanup_current_rows_cleared: AtomicU64,
+    cleanup_current_batches: AtomicU64,
+    cleanup_last_started_unix_seconds: AtomicI64,
+    cleanup_last_finished_unix_seconds: AtomicI64,
+    cleanup_last_duration_ms: AtomicU64,
+    cleanup_last_rows_cleared: AtomicU64,
+    recent_sse_disconnects: std::sync::Mutex<VecDeque<Instant>>,
+}
+
+impl RuntimeMetrics {
+    pub fn new() -> Self {
+        Self {
+            active_sse_streams: AtomicU64::new(0),
+            sse_completed_total: AtomicU64::new(0),
+            sse_client_disconnects_total: AtomicU64::new(0),
+            sse_upstream_errors_total: AtomicU64::new(0),
+            log_write_failures_total: AtomicU64::new(0),
+            slow_db_operations_total: AtomicU64::new(0),
+            cleanup_active: AtomicBool::new(false),
+            cleanup_runs_total: AtomicU64::new(0),
+            cleanup_errors_total: AtomicU64::new(0),
+            cleanup_rows_cleared_total: AtomicU64::new(0),
+            cleanup_batches_total: AtomicU64::new(0),
+            cleanup_current_rows_cleared: AtomicU64::new(0),
+            cleanup_current_batches: AtomicU64::new(0),
+            cleanup_last_started_unix_seconds: AtomicI64::new(0),
+            cleanup_last_finished_unix_seconds: AtomicI64::new(0),
+            cleanup_last_duration_ms: AtomicU64::new(0),
+            cleanup_last_rows_cleared: AtomicU64::new(0),
+            recent_sse_disconnects: std::sync::Mutex::new(VecDeque::new()),
+        }
+    }
+
+    pub fn start_sse_stream(&self) {
+        self.active_sse_streams.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn finish_sse_stream(&self) {
+        let _ =
+            self.active_sse_streams
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    value.checked_sub(1)
+                });
+    }
+
+    pub fn record_sse_complete(&self) {
+        self.sse_completed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_sse_client_disconnect(&self) {
+        self.sse_client_disconnects_total
+            .fetch_add(1, Ordering::Relaxed);
+        let mut recent = self
+            .recent_sse_disconnects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        recent.push_back(Instant::now());
+        prune_recent_instants(&mut recent, SSE_RECENT_DISCONNECT_WINDOW);
+    }
+
+    pub fn record_sse_upstream_error(&self) {
+        self.sse_upstream_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_log_write_failure(&self) {
+        self.log_write_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_slow_db_operation(&self) {
+        self.slow_db_operations_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn begin_cleanup(&self) {
+        self.cleanup_active.store(true, Ordering::Relaxed);
+        self.cleanup_current_rows_cleared
+            .store(0, Ordering::Relaxed);
+        self.cleanup_current_batches.store(0, Ordering::Relaxed);
+        self.cleanup_last_started_unix_seconds
+            .store(unix_seconds_now(), Ordering::Relaxed);
+        self.cleanup_runs_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_cleanup_batch(&self, rows_cleared: u64) {
+        if rows_cleared == 0 {
+            return;
+        }
+        self.cleanup_current_rows_cleared
+            .fetch_add(rows_cleared, Ordering::Relaxed);
+        self.cleanup_rows_cleared_total
+            .fetch_add(rows_cleared, Ordering::Relaxed);
+        self.cleanup_current_batches.fetch_add(1, Ordering::Relaxed);
+        self.cleanup_batches_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn finish_cleanup(&self, success: bool, duration: Duration) {
+        if !success {
+            self.cleanup_errors_total.fetch_add(1, Ordering::Relaxed);
+        }
+        self.cleanup_last_finished_unix_seconds
+            .store(unix_seconds_now(), Ordering::Relaxed);
+        self.cleanup_last_duration_ms
+            .store(duration.as_millis() as u64, Ordering::Relaxed);
+        self.cleanup_last_rows_cleared.store(
+            self.cleanup_current_rows_cleared.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.cleanup_active.store(false, Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> RuntimeMetricsSnapshot {
+        let recent_disconnects = {
+            let mut recent = self
+                .recent_sse_disconnects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            prune_recent_instants(&mut recent, SSE_RECENT_DISCONNECT_WINDOW);
+            recent.len() as u64
+        };
+
+        RuntimeMetricsSnapshot {
+            active_sse_streams: self.active_sse_streams.load(Ordering::Relaxed),
+            sse_completed_total: self.sse_completed_total.load(Ordering::Relaxed),
+            sse_client_disconnects_total: self.sse_client_disconnects_total.load(Ordering::Relaxed),
+            sse_recent_disconnects_10m: recent_disconnects,
+            sse_upstream_errors_total: self.sse_upstream_errors_total.load(Ordering::Relaxed),
+            log_write_failures_total: self.log_write_failures_total.load(Ordering::Relaxed),
+            slow_db_operations_total: self.slow_db_operations_total.load(Ordering::Relaxed),
+            cleanup_active: self.cleanup_active.load(Ordering::Relaxed),
+            cleanup_runs_total: self.cleanup_runs_total.load(Ordering::Relaxed),
+            cleanup_errors_total: self.cleanup_errors_total.load(Ordering::Relaxed),
+            cleanup_rows_cleared_total: self.cleanup_rows_cleared_total.load(Ordering::Relaxed),
+            cleanup_batches_total: self.cleanup_batches_total.load(Ordering::Relaxed),
+            cleanup_current_rows_cleared: self.cleanup_current_rows_cleared.load(Ordering::Relaxed),
+            cleanup_current_batches: self.cleanup_current_batches.load(Ordering::Relaxed),
+            cleanup_last_started_unix_seconds: nonzero_i64(
+                self.cleanup_last_started_unix_seconds
+                    .load(Ordering::Relaxed),
+            ),
+            cleanup_last_finished_unix_seconds: nonzero_i64(
+                self.cleanup_last_finished_unix_seconds
+                    .load(Ordering::Relaxed),
+            ),
+            cleanup_last_duration_ms: nonzero_u64(
+                self.cleanup_last_duration_ms.load(Ordering::Relaxed),
+            ),
+            cleanup_last_rows_cleared: self.cleanup_last_rows_cleared.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn prune_recent_instants(recent: &mut VecDeque<Instant>, window: Duration) {
+    let now = Instant::now();
+    let Some(cutoff) = now.checked_sub(window) else {
+        return;
+    };
+    while recent.front().is_some_and(|instant| *instant < cutoff) {
+        recent.pop_front();
+    }
+}
+
+fn nonzero_i64(value: i64) -> Option<i64> {
+    (value > 0).then_some(value)
+}
+
+fn nonzero_u64(value: u64) -> Option<u64> {
+    (value > 0).then_some(value)
+}
+
 impl AdminAuthCache {
     pub(crate) fn new() -> Self {
         let mut key = [0_u8; 32];
@@ -266,6 +481,7 @@ pub struct AppState {
     /// This closes the commit-to-publication window for newly-started requests.
     pub admin_credential_version: Arc<AtomicI64>,
     pub(crate) admin_auth_cache: Arc<AdminAuthCache>,
+    pub runtime_metrics: Arc<RuntimeMetrics>,
     pub started_at: Instant,
 }
 

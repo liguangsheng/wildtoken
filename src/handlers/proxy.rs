@@ -5,12 +5,12 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use crate::error::AppError;
 use crate::middleware::auth::DownstreamAuth;
 use crate::proxy::{client, logging, matcher};
-use crate::state::AppState;
+use crate::state::{AppState, RuntimeMetrics};
 
 const HOP_BY_HOP_RESPONSE_HEADERS: &[&str] = &[
     "connection",
@@ -94,14 +94,21 @@ fn protocol_error_response(
 
 struct ClientAbortLogGuard {
     pool: sqlx::SqlitePool,
+    metrics: Arc<RuntimeMetrics>,
     started_at: Instant,
     entry: Option<logging::LogEntry>,
 }
 
 impl ClientAbortLogGuard {
-    fn new(pool: &sqlx::SqlitePool, method: &str, path: &str) -> Self {
+    fn new(
+        pool: &sqlx::SqlitePool,
+        metrics: Arc<RuntimeMetrics>,
+        method: &str,
+        path: &str,
+    ) -> Self {
         Self {
             pool: pool.clone(),
+            metrics,
             started_at: Instant::now(),
             entry: Some(logging::LogEntry {
                 method: method.to_string(),
@@ -162,7 +169,7 @@ impl ClientAbortLogGuard {
             entry.status_code = Some(status_code);
             entry.error = Some(error);
             entry.duration_ms = Some(self.started_at.elapsed().as_millis() as i32);
-            logging::schedule_log(&self.pool, entry);
+            logging::schedule_log(&self.pool, self.metrics.clone(), entry);
         }
     }
 }
@@ -171,7 +178,7 @@ impl Drop for ClientAbortLogGuard {
     fn drop(&mut self) {
         if let Some(mut entry) = self.entry.take() {
             entry.duration_ms = Some(self.started_at.elapsed().as_millis() as i32);
-            logging::schedule_log(&self.pool, entry);
+            logging::schedule_log(&self.pool, self.metrics.clone(), entry);
         }
     }
 }
@@ -195,7 +202,8 @@ pub async fn proxy_handler(
         .trim_start_matches('/');
     let query = uri.query();
 
-    let mut abort_log = ClientAbortLogGuard::new(&state.db, &method, path);
+    let mut abort_log =
+        ClientAbortLogGuard::new(&state.db, state.runtime_metrics.clone(), &method, path);
     abort_log.set_downstream_token(auth.token_id, &auth.token_name);
     abort_log.set_client_type(&auth.client_type);
 
@@ -320,7 +328,7 @@ mod tests {
         config::Settings,
         models::settings::{AdminCredential, RuntimeSettings},
         proxy::matcher::BackoffManager,
-        state::{init_db, AdminAuthCache, AppState},
+        state::{init_db, AdminAuthCache, AppState, RuntimeMetrics},
     };
     use axum::{
         body::{Body, Bytes},
@@ -430,8 +438,10 @@ mod tests {
             })),
             admin_credential_version: Arc::new(AtomicI64::new(1)),
             admin_auth_cache: Arc::new(AdminAuthCache::new()),
+            runtime_metrics: Arc::new(RuntimeMetrics::new()),
             started_at: Instant::now(),
         };
+        let runtime_metrics = state.runtime_metrics.clone();
         let proxy_app = Router::new()
             .route("/v1/{*path}", any(proxy_handler))
             .with_state(state);
@@ -537,6 +547,10 @@ mod tests {
         assert_eq!(response_snapshot["body"]["byte_length"], received.len());
         assert_eq!(response_snapshot["body"]["truncated"], true);
         assert!(!logged_body.contains("\"total_tokens\":18"));
+        let metrics = runtime_metrics.snapshot();
+        assert_eq!(metrics.active_sse_streams, 0);
+        assert_eq!(metrics.sse_completed_total, 1);
+        assert_eq!(metrics.sse_client_disconnects_total, 0);
 
         proxy_server.abort();
         upstream_server.abort();

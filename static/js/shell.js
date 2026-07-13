@@ -608,6 +608,13 @@ function refreshSystemUptime() {
   }
 }
 
+function formatMetricDuration(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, "")}s`;
+}
+
 function startSystemUptimeTicker() {
   if (systemUptimeTimer !== null || currentViewFromHash() !== "settings" || !pageVisible) return;
   systemUptimeTimer = window.setInterval(refreshSystemUptime, 1000);
@@ -626,6 +633,8 @@ function renderSystemInfo(system) {
   const serverTimeMs = Date.parse(system.current_server_time || "");
   systemServerTimeBaseMs = Number.isFinite(serverTimeMs) ? serverTimeMs : null;
   systemServerTimeOffsetMinutes = parseRfc3339OffsetMinutes(system.current_server_time);
+  const metrics = system.runtime_metrics || {};
+  const cleanup = metrics.cleanup || {};
   const entries = [
     ["服务", system.service || "WildToken"],
     ["版本", system.version || "—"],
@@ -637,6 +646,16 @@ function renderSystemInfo(system) {
     ["近 24 小时日志", Number(system.log_count_24h || 0).toLocaleString("zh-CN")],
     ["启用渠道", `${system.enabled_upstream_count || 0} / ${system.total_upstream_count || 0}`],
     ["近 1 分钟请求", Number(system.recent_one_minute_log_count || 0).toLocaleString("zh-CN")],
+    ["活跃 SSE", Number(metrics.active_sse_streams || 0).toLocaleString("zh-CN")],
+    ["10 分钟 SSE 断连", Number(metrics.sse_recent_disconnects_10m || 0).toLocaleString("zh-CN")],
+    ["SSE 断连总数", Number(metrics.sse_client_disconnects_total || 0).toLocaleString("zh-CN")],
+    ["SSE 上游错误", Number(metrics.sse_upstream_errors_total || 0).toLocaleString("zh-CN")],
+    ["日志写失败", Number(metrics.log_write_failures_total || 0).toLocaleString("zh-CN")],
+    ["慢 DB 操作", Number(metrics.slow_db_operations_total || 0).toLocaleString("zh-CN")],
+    ["清理任务", cleanup.active ? "运行中" : "空闲"],
+    ["清理进度", cleanup.active
+      ? `${Number(cleanup.current_rows_cleared || 0).toLocaleString("zh-CN")} 行 / ${Number(cleanup.current_batches || 0).toLocaleString("zh-CN")} 批`
+      : `${Number(cleanup.last_rows_cleared || 0).toLocaleString("zh-CN")} 行 · ${formatMetricDuration(cleanup.last_duration_ms)}`],
   ];
   systemInfoGrid.innerHTML = entries.map(([label, value]) => `<div class="system-info-item"><span>${escapeHtml(label)}</span><strong${label === "运行时长" ? " data-system-uptime" : ""}${label === "当前服务器时间" ? " data-system-server-time" : ""}>${escapeHtml(String(value))}</strong></div>`).join("");
   const timeout = Number(system.default_upstream_timeout_seconds);

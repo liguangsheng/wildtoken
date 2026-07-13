@@ -1,4 +1,10 @@
+use std::sync::Arc;
+
 use base64::Engine as _;
+
+use crate::state::RuntimeMetrics;
+
+const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -450,11 +456,16 @@ fn encode_snapshot_pair(
 
 /// Spawn a background task to write the log entry so the caller is not blocked
 /// and the write cannot be cancelled by the caller's drop.
-pub fn schedule_log(pool: &sqlx::SqlitePool, entry: LogEntry) {
+pub fn schedule_log(pool: &sqlx::SqlitePool, metrics: Arc<RuntimeMetrics>, entry: LogEntry) {
     let pool = pool.clone();
     tokio::spawn(async move {
+        let started_at = std::time::Instant::now();
         if let Err(error) = insert_log_entry(&pool, entry).await {
+            metrics.record_log_write_failure();
             tracing::error!(?error, "failed to persist request log");
+        }
+        if started_at.elapsed() >= SLOW_DB_OPERATION_THRESHOLD {
+            metrics.record_slow_db_operation();
         }
     });
 }
@@ -539,6 +550,7 @@ async fn insert_log_entry(
 pub async fn cleanup_loop(
     pool: sqlx::SqlitePool,
     runtime_settings: std::sync::Arc<tokio::sync::RwLock<crate::models::settings::RuntimeSettings>>,
+    metrics: Arc<RuntimeMetrics>,
 ) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
 
@@ -548,14 +560,28 @@ pub async fn cleanup_loop(
         interval.tick().await;
 
         let settings = runtime_settings.read().await.clone();
-        if let Err(e) =
-            crate::db::log::clear_old_log_bodies(&pool, settings.log_body_keep_count).await
+        let cleanup_started_at = std::time::Instant::now();
+        let mut cleanup_succeeded = true;
+        metrics.begin_cleanup();
+        if let Err(e) = crate::db::log::clear_old_log_bodies_with_metrics(
+            &pool,
+            settings.log_body_keep_count,
+            &metrics,
+        )
+        .await
         {
+            cleanup_succeeded = false;
             tracing::error!("clear_old_log_bodies failed: {:?}", e);
         }
 
+        let delete_started_at = std::time::Instant::now();
         if let Err(e) = crate::db::log::delete_old_logs(&pool, settings.log_retention_days).await {
+            cleanup_succeeded = false;
             tracing::error!("delete_old_logs failed: {:?}", e);
         }
+        if delete_started_at.elapsed() >= SLOW_DB_OPERATION_THRESHOLD {
+            metrics.record_slow_db_operation();
+        }
+        metrics.finish_cleanup(cleanup_succeeded, cleanup_started_at.elapsed());
     }
 }

@@ -110,6 +110,7 @@ let logsLoading = false;
 
 let dashboardLogItems = [];
 let dashboardTokenUsage = null;
+let dashboardRuntimeMetrics = null;
 let dashboardRefreshTimer = null;
 let dashboardLoading = false;
 let lastDashboardLoadError = "";
@@ -119,6 +120,7 @@ const dashboardRefreshButton = document.querySelector("#dashboard-refresh");
 const dashboardKpis = document.querySelector("#dashboard-kpis");
 const dashboardTokenKpis = document.querySelector("#dashboard-token-kpis");
 const dashboardRequestKpis = document.querySelector("#dashboard-request-kpis");
+const dashboardRuntimeKpis = document.querySelector("#dashboard-runtime-kpis");
 const dashboardStatusChart = document.querySelector("#dashboard-status-chart");
 const dashboardStatusMeta = document.querySelector("#dashboard-status-meta");
 const dashboardLatencyChart = document.querySelector("#dashboard-latency-chart");

@@ -4,6 +4,7 @@ use axum::body::Bytes;
 use futures::{Stream, StreamExt};
 
 use super::super::{logging, matcher::BackoffManager};
+use crate::state::RuntimeMetrics;
 
 type UpstreamByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
 type TokenUsage = (Option<i32>, Option<i32>, Option<i32>);
@@ -419,6 +420,7 @@ pub(super) struct SseStreamState {
     pub(super) log_entry: Option<logging::LogEntry>,
     pub(super) pool: sqlx::SqlitePool,
     pub(super) backoff: Arc<BackoffManager>,
+    pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) upstream_id: i64,
     pub(super) auto_disabled: bool,
 }
@@ -434,9 +436,11 @@ impl SseStreamState {
         log_entry: logging::LogEntry,
         pool: sqlx::SqlitePool,
         backoff: Arc<BackoffManager>,
+        metrics: Arc<RuntimeMetrics>,
         upstream_id: i64,
         auto_disabled: bool,
     ) -> Self {
+        metrics.start_sse_stream();
         Self {
             stream,
             capture: ResponseCapture::new(log_body_max_bytes),
@@ -448,6 +452,7 @@ impl SseStreamState {
             log_entry: Some(log_entry),
             pool,
             backoff,
+            metrics,
             upstream_id,
             auto_disabled,
         }
@@ -470,9 +475,9 @@ impl SseStreamState {
         }
     }
 
-    fn finish_log(&mut self, status_code: i32, error: Option<String>) {
+    fn finish_log(&mut self, status_code: i32, error: Option<String>) -> bool {
         let Some(mut entry) = self.log_entry.take() else {
-            return;
+            return false;
         };
 
         self.observation.finish(self.start);
@@ -495,17 +500,22 @@ impl SseStreamState {
         entry.error = error;
         entry.upstream_response = Some(response_snapshot.clone());
         entry.downstream_response = Some(response_snapshot);
-        logging::schedule_log(&self.pool, entry);
+        logging::schedule_log(&self.pool, self.metrics.clone(), entry);
+        true
     }
 
     pub(super) fn finish_complete(&mut self) {
         self.record_response_health();
-        self.finish_log(self.upstream_status as i32, None);
+        if self.finish_log(self.upstream_status as i32, None) {
+            self.metrics.record_sse_complete();
+        }
     }
 
     pub(super) fn finish_upstream_error(&mut self, error: String) {
         self.backoff.record_failure(self.upstream_id);
-        self.finish_log(502, Some(error));
+        if self.finish_log(502, Some(error)) {
+            self.metrics.record_sse_upstream_error();
+        }
     }
 }
 
@@ -517,12 +527,15 @@ impl Drop for SseStreamState {
                 self.finish_complete();
             } else {
                 self.record_response_health();
-                self.finish_log(
+                if self.finish_log(
                     499,
                     Some("client disconnected before the SSE response completed".to_string()),
-                );
+                ) {
+                    self.metrics.record_sse_client_disconnect();
+                }
             }
         }
+        self.metrics.finish_sse_stream();
     }
 }
 

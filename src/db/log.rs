@@ -4,9 +4,11 @@ use crate::error::AppError;
 use crate::models::request_log::{
     RequestLogDetailOut, RequestLogOut, TokenUsageStatsOut, TokenUsageWindowOut,
 };
+use crate::state::RuntimeMetrics;
 
 const LOG_BODY_CLEANUP_BATCH_SIZE: i64 = 4;
 const LOG_BODY_CLEANUP_BATCH_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
+const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
 
 // ── Internal query types (to avoid exceeding sqlx tuple limit) ──────────────
 
@@ -333,10 +335,39 @@ pub async fn token_usage_stats(pool: &SqlitePool) -> Result<TokenUsageStatsOut, 
     })
 }
 
-pub async fn clear_old_log_bodies(pool: &SqlitePool, keep_count: i64) -> Result<(), AppError> {
+#[cfg(test)]
+async fn clear_old_log_bodies(pool: &SqlitePool, keep_count: i64) -> Result<u64, AppError> {
+    clear_old_log_bodies_inner(pool, keep_count, None).await
+}
+
+pub async fn clear_old_log_bodies_with_metrics(
+    pool: &SqlitePool,
+    keep_count: i64,
+    metrics: &RuntimeMetrics,
+) -> Result<u64, AppError> {
+    clear_old_log_bodies_inner(pool, keep_count, Some(metrics)).await
+}
+
+async fn clear_old_log_bodies_inner(
+    pool: &SqlitePool,
+    keep_count: i64,
+    metrics: Option<&RuntimeMetrics>,
+) -> Result<u64, AppError> {
+    let mut total_affected = 0;
     loop {
+        let batch_started_at = std::time::Instant::now();
         let affected =
             clear_old_log_bodies_batch(pool, keep_count, LOG_BODY_CLEANUP_BATCH_SIZE).await?;
+        if batch_started_at.elapsed() >= SLOW_DB_OPERATION_THRESHOLD {
+            if let Some(metrics) = metrics {
+                metrics.record_slow_db_operation();
+            }
+        }
+        if let Some(metrics) = metrics {
+            metrics.record_cleanup_batch(affected);
+        }
+        total_affected += affected;
+
         if affected == 0 || affected < LOG_BODY_CLEANUP_BATCH_SIZE as u64 {
             break;
         }
@@ -344,7 +375,7 @@ pub async fn clear_old_log_bodies(pool: &SqlitePool, keep_count: i64) -> Result<
         tokio::time::sleep(LOG_BODY_CLEANUP_BATCH_PAUSE).await;
     }
 
-    Ok(())
+    Ok(total_affected)
 }
 
 async fn clear_old_log_bodies_batch(

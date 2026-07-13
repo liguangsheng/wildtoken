@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::{
-    hash_admin_token, init_db, AdminAuthCache, AppState, CLIENT_TYPE_BACKFILL,
+    hash_admin_token, init_db, AdminAuthCache, AppState, RuntimeMetrics, CLIENT_TYPE_BACKFILL,
     REQUEST_LOG_PAYLOADS_MIGRATION, RESPONSE_REASONING_EFFORT_BACKFILL,
 };
 
@@ -37,6 +37,7 @@ fn state_with_credential(credential: AdminCredential) -> AppState {
         admin_credential_version: Arc::new(AtomicI64::new(credential.credential_version)),
         admin_credential: Arc::new(RwLock::new(credential)),
         admin_auth_cache: Arc::new(AdminAuthCache::new()),
+        runtime_metrics: Arc::new(RuntimeMetrics::new()),
         started_at: Instant::now(),
     }
 }

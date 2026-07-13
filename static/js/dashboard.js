@@ -37,6 +37,24 @@ function requestCountCard(label, usage, scopeLabel) {
   };
 }
 
+function formatRuntimeDuration(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, "")}s`;
+}
+
+function cleanupRuntimeHint(cleanup) {
+  if (!cleanup) return "等待首次运行";
+  if (cleanup.active) {
+    return `${formatCompactNumber(Number(cleanup.current_rows_cleared || 0))} 行 · ${formatCompactNumber(Number(cleanup.current_batches || 0))} 批`;
+  }
+  const duration = cleanup.last_duration_ms == null
+    ? "—"
+    : formatRuntimeDuration(cleanup.last_duration_ms);
+  return `上次 ${duration} · ${formatCompactNumber(Number(cleanup.last_rows_cleared || 0))} 行`;
+}
+
 function renderDashboardKpiCards(container, cards) {
   if (!container) return;
   container.innerHTML = cards.map((card) => `
@@ -213,6 +231,38 @@ function renderDashboard() {
     requestCountCard("7d 请求", dashboardTokenUsage?.seven_days, "最近 7 天"),
     requestCountCard("30d 请求", dashboardTokenUsage?.thirty_days, "最近 30 天"),
   ]);
+  const metrics = dashboardRuntimeMetrics || {};
+  const cleanup = metrics.cleanup || {};
+  const activeSse = Number(metrics.active_sse_streams || 0);
+  const recentDisconnects = Number(metrics.sse_recent_disconnects_10m || 0);
+  const logWriteFailures = Number(metrics.log_write_failures_total || 0);
+  const slowDbOperations = Number(metrics.slow_db_operations_total || 0);
+  renderDashboardKpiCards(dashboardRuntimeKpis, [
+    {
+      value: formatCompactNumber(activeSse),
+      label: "活跃流",
+      hint: "当前 SSE 连接",
+      tone: activeSse > 0 ? "tone-ok" : "",
+    },
+    {
+      value: formatCompactNumber(recentDisconnects),
+      label: "10m 断连",
+      hint: `累计 ${formatCompactNumber(Number(metrics.sse_client_disconnects_total || 0))}`,
+      tone: recentDisconnects > 0 ? "tone-warn" : "",
+    },
+    {
+      value: formatCompactNumber(logWriteFailures),
+      label: "日志写失败",
+      hint: `慢 DB ${formatCompactNumber(slowDbOperations)}`,
+      tone: logWriteFailures > 0 || slowDbOperations > 0 ? "tone-danger" : "",
+    },
+    {
+      value: cleanup.active ? "运行中" : "空闲",
+      label: "清理任务",
+      hint: cleanupRuntimeHint(cleanup),
+      tone: cleanup.active ? "tone-warn" : "",
+    },
+  ]);
 
   const { c2, c4, c5, cOther } = countStatusBuckets(items);
   if (dashboardStatusMeta) {
@@ -345,12 +395,14 @@ async function loadDashboardData() {
       limit: String(DASHBOARD_LOG_LIMIT),
       offset: "0",
     });
-    const [page, tokenUsage] = await Promise.all([
+    const [page, tokenUsage, system] = await Promise.all([
       api(`/api/admin/logs?${params}`),
       api("/api/admin/logs/token-usage"),
+      api("/api/admin/system"),
     ]);
     dashboardLogItems = page.items || [];
     dashboardTokenUsage = tokenUsage;
+    dashboardRuntimeMetrics = system?.runtime_metrics || null;
     lastDashboardLoadError = "";
     renderDashboard();
   } catch (error) {
