@@ -170,13 +170,14 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"UPDATE request_logs
            SET client_type = CASE
-               WHEN LOWER(COALESCE(downstream_request, '')) LIKE '%opencode%' THEN 'opencode'
-               WHEN LOWER(COALESCE(downstream_request, '')) LIKE '%codex%' THEN 'codex'
-               WHEN LOWER(COALESCE(downstream_request, '')) LIKE '%claude%'
-                 OR LOWER(COALESCE(downstream_request, '')) LIKE '%anthropic-version%' THEN 'claude'
+               WHEN LOWER(CASE WHEN json_valid(downstream_request) THEN COALESCE(json_extract(downstream_request, '$.headers.user-agent'), '') ELSE '' END) LIKE '%opencode%' THEN 'opencode'
+               WHEN LOWER(CASE WHEN json_valid(downstream_request) THEN COALESCE(json_extract(downstream_request, '$.headers.user-agent'), '') ELSE '' END) LIKE '%codex%' THEN 'codex'
+               WHEN path = 'messages'
+                 OR LOWER(CASE WHEN json_valid(downstream_request) THEN COALESCE(json_extract(downstream_request, '$.headers.user-agent'), '') ELSE '' END) LIKE '%claude%'
+                 OR LOWER(CASE WHEN json_valid(downstream_request) THEN COALESCE(json_extract(downstream_request, '$.headers.anthropic-version'), '') ELSE '' END) <> '' THEN 'claude'
                ELSE 'unknown'
            END
-           WHERE client_type IS NULL OR client_type = 'unknown'"#,
+           WHERE json_valid(downstream_request)"#,
     )
     .execute(pool)
     .await?;
