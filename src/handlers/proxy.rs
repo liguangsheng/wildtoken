@@ -288,9 +288,13 @@ pub async fn proxy_handler(
     )
     .await;
     abort_log.disarm();
-    let (status, resp_headers, body) = proxied?;
+    let client::ProxyResponse {
+        status,
+        headers: resp_headers,
+        body,
+    } = proxied?;
 
-    let mut response = Response::new(Body::from(body));
+    let mut response = Response::new(body);
     *response.status_mut() = status;
 
     for (name, value) in &resp_headers {
@@ -307,4 +311,208 @@ pub async fn proxy_handler(
     }
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proxy_handler;
+    use crate::{
+        config::Settings,
+        models::settings::{AdminCredential, RuntimeSettings},
+        proxy::matcher::BackoffManager,
+        state::{init_db, AppState},
+    };
+    use axum::{
+        body::{Body, Bytes},
+        http::{header, StatusCode},
+        response::Response,
+        routing::{any, post},
+        Router,
+    };
+    use futures::{FutureExt, StreamExt};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::{
+        convert::Infallible,
+        sync::{atomic::AtomicI64, Arc},
+        time::{Duration, Instant},
+    };
+    use tokio::sync::{Notify, RwLock};
+
+    const FIRST_EVENT: &[u8] = b"data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n";
+    const FINAL_EVENTS: &[u8] = b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\ndata: [DONE]\n\n";
+
+    #[tokio::test]
+    async fn sse_is_streamed_end_to_end_and_logged_after_completion() {
+        let release_final_event = Arc::new(Notify::new());
+        let upstream_release = Arc::clone(&release_final_event);
+        let upstream_app = Router::new().route(
+            "/v1/chat/completions",
+            post(move || {
+                let release = Arc::clone(&upstream_release);
+                async move {
+                    let stream =
+                        futures::stream::unfold((0_u8, release), |(step, release)| async move {
+                            match step {
+                                0 => Some((
+                                    Ok::<Bytes, Infallible>(Bytes::from_static(FIRST_EVENT)),
+                                    (1, release),
+                                )),
+                                1 => {
+                                    release.notified().await;
+                                    Some((Ok(Bytes::from_static(FINAL_EVENTS)), (2, release)))
+                                }
+                                _ => None,
+                            }
+                        });
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")
+                        .header(header::CACHE_CONTROL, "no-cache")
+                        .body(Body::from_stream(stream))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let upstream_server =
+            tokio::spawn(async move { axum::serve(listener, upstream_app).await.unwrap() });
+
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        sqlx::query(
+            "INSERT INTO api_tokens (name, token) VALUES ('stream-test', 'downstream-secret')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"INSERT INTO upstreams
+                (name, base_url, model_names, enabled, timeout_seconds)
+               VALUES ('sse-upstream', ?, '["stream-model"]', 1, 10)"#,
+        )
+        .bind(format!("http://{upstream_address}"))
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let state = AppState {
+            db: db.clone(),
+            http_client: reqwest::Client::new(),
+            settings: Settings::default(),
+            backoff: Arc::new(BackoffManager::new()),
+            runtime_settings: Arc::new(RwLock::new(RuntimeSettings::default())),
+            admin_credential: Arc::new(RwLock::new(AdminCredential {
+                credential_hash: "test".into(),
+                credential_version: 1,
+            })),
+            admin_credential_version: Arc::new(AtomicI64::new(1)),
+            started_at: Instant::now(),
+        };
+        let proxy_app = Router::new()
+            .route("/v1/{*path}", any(proxy_handler))
+            .with_state(state);
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_address = proxy_listener.local_addr().unwrap();
+        let proxy_server =
+            tokio::spawn(async move { axum::serve(proxy_listener, proxy_app).await.unwrap() });
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            reqwest::Client::new()
+                .post(format!("http://{proxy_address}/v1/chat/completions"))
+                .bearer_auth("downstream-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(r#"{"model":"stream-model","stream":true,"messages":[]}"#)
+                .send(),
+        )
+        .await
+        .expect("proxy waited for the complete upstream SSE body")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/event-stream; charset=utf-8"
+        );
+
+        let mut body = response.bytes_stream();
+        let mut first_received = Vec::new();
+        while first_received.len() < FIRST_EVENT.len() {
+            let chunk = tokio::time::timeout(Duration::from_secs(1), body.next())
+                .await
+                .expect("first SSE event was not forwarded")
+                .expect("SSE body ended before the first event")
+                .unwrap();
+            first_received.extend_from_slice(&chunk);
+        }
+        assert_eq!(first_received, FIRST_EVENT);
+        assert!(body.next().now_or_never().is_none());
+
+        release_final_event.notify_one();
+        let mut received = first_received;
+        while let Some(chunk) = tokio::time::timeout(Duration::from_secs(1), body.next())
+            .await
+            .expect("SSE body did not finish after the final event")
+        {
+            received.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(&received[FIRST_EVENT.len()..], FINAL_EVENTS);
+
+        let log = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let row = sqlx::query_as::<
+                    _,
+                    (
+                        i64,
+                        i64,
+                        Option<i32>,
+                        Option<i32>,
+                        Option<i32>,
+                        Option<i32>,
+                        Option<i32>,
+                        Option<String>,
+                    ),
+                >(
+                    r#"SELECT id, stream, status_code, prompt_tokens, completion_tokens,
+                              total_tokens, first_token_ms, error
+                       FROM request_logs"#,
+                )
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+                if let Some(row) = row {
+                    break row;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed SSE request was not logged");
+
+        assert_eq!(log.1, 1);
+        assert_eq!(log.2, Some(200));
+        assert_eq!((log.3, log.4, log.5), (Some(11), Some(7), Some(18)));
+        assert!(log.6.is_some());
+        assert_eq!(log.7, None);
+
+        let response_snapshot: String = sqlx::query_scalar(
+            "SELECT response_snapshot FROM request_log_payloads WHERE request_log_id = ?",
+        )
+        .bind(log.0)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let response_snapshot: serde_json::Value =
+            serde_json::from_str(&response_snapshot).unwrap();
+        let logged_body = response_snapshot["body"]["text"].as_str().unwrap();
+        assert!(logged_body.contains("\"content\":\"first\""));
+        assert!(logged_body.contains("\"total_tokens\":18"));
+
+        proxy_server.abort();
+        upstream_server.abort();
+    }
 }

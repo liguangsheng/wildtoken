@@ -1,11 +1,20 @@
 use crate::error::AppError;
 use crate::models::upstream::UpstreamRow;
 use crate::state::AppState;
-use futures::StreamExt;
-use std::collections::HashMap;
+use axum::body::{Body, Bytes};
+use futures::{Stream, StreamExt};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use super::logging;
 use super::matcher::{self, BackoffManager};
+
+type UpstreamByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
+
+pub struct ProxyResponse {
+    pub status: axum::http::StatusCode,
+    pub headers: HashMap<String, String>,
+    pub body: Body,
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -431,13 +440,13 @@ pub fn extract_usage(
         Err(_) => return (None, None, None),
     };
 
-    if content_type.contains("text/event-stream") || content_type.contains("sse") {
+    if is_sse_content_type(content_type) || content_type.to_ascii_lowercase().contains("sse") {
         let mut prompt = None;
         let mut completion = None;
         let mut total = None;
         for line in text.lines() {
             let line = line.trim();
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
                 if data == "[DONE]" {
                     continue;
                 }
@@ -464,6 +473,50 @@ pub fn extract_usage(
     }
 
     (None, None, None)
+}
+
+fn is_sse_content_type(content_type: &str) -> bool {
+    content_type.to_ascii_lowercase().contains("event-stream")
+}
+
+fn sse_bytes_line_has_visible_token(line: &[u8]) -> bool {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    std::str::from_utf8(line)
+        .ok()
+        .is_some_and(sse_line_has_visible_token)
+}
+
+fn observe_sse_chunk_for_first_token(
+    chunk: &[u8],
+    line_buf: &mut Vec<u8>,
+    first_token_ms: &mut Option<i32>,
+    start: std::time::Instant,
+) {
+    if first_token_ms.is_some() {
+        return;
+    }
+
+    line_buf.extend_from_slice(chunk);
+    while let Some(pos) = line_buf.iter().position(|byte| *byte == b'\n') {
+        let rest = line_buf.split_off(pos + 1);
+        line_buf.truncate(pos);
+        let has_visible_token = sse_bytes_line_has_visible_token(line_buf);
+        *line_buf = rest;
+        if has_visible_token {
+            *first_token_ms = Some(start.elapsed().as_millis() as i32);
+            break;
+        }
+    }
+}
+
+fn observe_sse_end_for_first_token(
+    line_buf: &[u8],
+    first_token_ms: &mut Option<i32>,
+    start: std::time::Instant,
+) {
+    if first_token_ms.is_none() && sse_bytes_line_has_visible_token(line_buf) {
+        *first_token_ms = Some(start.elapsed().as_millis() as i32);
+    }
 }
 
 /// Extract reasoning effort from an OpenAI-compatible request body.
@@ -603,41 +656,107 @@ async fn read_response_body(
 ) -> Result<(Vec<u8>, Option<i32>), reqwest::Error> {
     let mut body_bytes = Vec::new();
     let mut first_token_ms = None;
-    let mut line_buf = String::new();
+    let mut line_buf = Vec::new();
     let mut stream = response.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         body_bytes.extend_from_slice(&chunk);
 
-        if first_token_ms.is_none() {
-            line_buf.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(pos) = line_buf.find('\n') {
-                let line = line_buf[..pos].trim_end_matches('\r').to_string();
-                let rest = line_buf[pos + 1..].to_string();
-                line_buf = rest;
-                if sse_line_has_visible_token(&line) {
-                    first_token_ms = Some(start.elapsed().as_millis() as i32);
-                    break;
-                }
-            }
-        }
+        observe_sse_chunk_for_first_token(&chunk, &mut line_buf, &mut first_token_ms, start);
     }
 
     // Final partial line (rare, but keep parity with buffered detection).
-    if first_token_ms.is_none() && sse_line_has_visible_token(line_buf.trim_end_matches('\r')) {
-        first_token_ms = Some(start.elapsed().as_millis() as i32);
-    }
+    observe_sse_end_for_first_token(&line_buf, &mut first_token_ms, start);
 
     Ok((body_bytes, first_token_ms))
 }
 
+struct SseStreamState {
+    stream: UpstreamByteStream,
+    body_bytes: Vec<u8>,
+    line_buf: Vec<u8>,
+    first_token_ms: Option<i32>,
+    start: std::time::Instant,
+    upstream_status: u16,
+    response_headers: HashMap<String, String>,
+    content_type: String,
+    log_body_max_bytes: usize,
+    log_entry: Option<logging::LogEntry>,
+    pool: sqlx::SqlitePool,
+    backoff: Arc<BackoffManager>,
+    upstream_id: i64,
+    auto_disabled: bool,
+}
+
+impl SseStreamState {
+    fn record_response_health(&self) {
+        if self.auto_disabled || (200..300).contains(&self.upstream_status) {
+            self.backoff.record_success(self.upstream_id);
+        } else {
+            self.backoff.record_failure(self.upstream_id);
+        }
+    }
+
+    fn finish_log(&mut self, status_code: i32, error: Option<String>) {
+        let Some(mut entry) = self.log_entry.take() else {
+            return;
+        };
+
+        observe_sse_end_for_first_token(&self.line_buf, &mut self.first_token_ms, self.start);
+        let (prompt_tokens, completion_tokens, total_tokens) =
+            extract_usage(&self.body_bytes, &self.content_type);
+        let response_reasoning_effort =
+            extract_response_reasoning_effort(&self.body_bytes, &self.content_type);
+        let response_snapshot = logging::snapshot_response(
+            self.upstream_status,
+            &self.response_headers,
+            Some(&self.body_bytes),
+            self.log_body_max_bytes,
+        );
+
+        entry.status_code = Some(status_code);
+        entry.response_reasoning_effort = response_reasoning_effort;
+        entry.prompt_tokens = prompt_tokens;
+        entry.completion_tokens = completion_tokens;
+        entry.total_tokens = total_tokens;
+        entry.first_token_ms = self.first_token_ms;
+        entry.duration_ms = Some(self.start.elapsed().as_millis() as i32);
+        entry.error = error;
+        entry.upstream_response = Some(response_snapshot.clone());
+        entry.downstream_response = Some(response_snapshot);
+        logging::schedule_log(&self.pool, entry);
+    }
+
+    fn finish_complete(&mut self) {
+        self.record_response_health();
+        self.finish_log(self.upstream_status as i32, None);
+    }
+
+    fn finish_upstream_error(&mut self, error: String) {
+        self.backoff.record_failure(self.upstream_id);
+        self.finish_log(502, Some(error));
+    }
+}
+
+impl Drop for SseStreamState {
+    fn drop(&mut self) {
+        if self.log_entry.is_some() {
+            self.record_response_health();
+            self.finish_log(
+                499,
+                Some("client disconnected before the SSE response completed".to_string()),
+            );
+        }
+    }
+}
+
 // ── Main proxy function ─────────────────────────────────────────────────────
 
-/// Proxy a request to the upstream, returning (status_code, response_headers, body_bytes).
+/// Proxy a request to the upstream, streaming SSE bodies as they arrive.
 pub async fn proxy_request(
     state: &AppState,
-    backoff: &BackoffManager,
+    backoff: &Arc<BackoffManager>,
     upstream: &UpstreamRow,
     downstream_token_id: i64,
     downstream_token_name: &str,
@@ -648,7 +767,7 @@ pub async fn proxy_request(
     query_params: Option<&str>,
     downstream_headers: &axum::http::HeaderMap,
     body: &[u8],
-) -> Result<(axum::http::StatusCode, HashMap<String, String>, Vec<u8>), AppError> {
+) -> Result<ProxyResponse, AppError> {
     let start = std::time::Instant::now();
     let reasoning_effort = extract_reasoning_effort(body);
 
@@ -740,6 +859,80 @@ pub async fn proxy_request(
         .cloned()
         .unwrap_or_default();
 
+    let status_u16 = status.as_u16();
+    if is_sse_content_type(&content_type) {
+        let auto_disabled = matcher::AUTO_DISABLE_STATUS_CODES.contains(&status_u16);
+        if auto_disabled {
+            let _ = crate::db::upstream::set_upstream_enabled(&state.db, upstream.id, false).await;
+        }
+
+        let log_entry = logging::LogEntry {
+            method: method.to_string(),
+            path: path.to_string(),
+            downstream_token_id: Some(downstream_token_id),
+            downstream_token_name: Some(downstream_token_name.to_string()),
+            client_type: Some(client_type.to_string()),
+            upstream_id: Some(upstream.id),
+            upstream_name: Some(upstream.name.clone()),
+            model: forward_model.map(str::to_string),
+            reasoning_effort,
+            stream: true,
+            status_code: Some(status_u16 as i32),
+            downstream_request: Some(downstream_snap),
+            upstream_request: Some(upstream_snap),
+            ..Default::default()
+        };
+        let stream_state = SseStreamState {
+            stream: Box::pin(response.bytes_stream()),
+            body_bytes: Vec::new(),
+            line_buf: Vec::new(),
+            first_token_ms: None,
+            start,
+            upstream_status: status_u16,
+            response_headers: resp_headers.clone(),
+            content_type,
+            log_body_max_bytes,
+            log_entry: Some(log_entry),
+            pool: state.db.clone(),
+            backoff: Arc::clone(backoff),
+            upstream_id: upstream.id,
+            auto_disabled,
+        };
+        let body_stream = futures::stream::unfold(stream_state, |mut stream_state| async move {
+            if stream_state.log_entry.is_none() {
+                return None;
+            }
+
+            match stream_state.stream.next().await {
+                Some(Ok(chunk)) => {
+                    stream_state.body_bytes.extend_from_slice(&chunk);
+                    observe_sse_chunk_for_first_token(
+                        &chunk,
+                        &mut stream_state.line_buf,
+                        &mut stream_state.first_token_ms,
+                        stream_state.start,
+                    );
+                    Some((Ok::<Bytes, std::io::Error>(chunk), stream_state))
+                }
+                Some(Err(error)) => {
+                    let message = error.to_string();
+                    stream_state.finish_upstream_error(message.clone());
+                    Some((Err(std::io::Error::other(message)), stream_state))
+                }
+                None => {
+                    stream_state.finish_complete();
+                    None
+                }
+            }
+        });
+
+        return Ok(ProxyResponse {
+            status,
+            headers: resp_headers,
+            body: Body::from_stream(body_stream),
+        });
+    }
+
     let (body_bytes, streamed_first_token_ms) = match read_response_body(response, start).await {
         Ok(v) => v,
         Err(e) => {
@@ -768,7 +961,6 @@ pub async fn proxy_request(
         }
     };
 
-    let status_u16 = status.as_u16();
     let auto_disabled = matcher::AUTO_DISABLE_STATUS_CODES.contains(&status_u16);
     if auto_disabled {
         let _ = crate::db::upstream::set_upstream_enabled(&state.db, upstream.id, false).await;
@@ -829,7 +1021,11 @@ pub async fn proxy_request(
     };
     logging::schedule_log(&state.db, log_entry);
 
-    Ok((status, resp_headers, body_bytes))
+    Ok(ProxyResponse {
+        status,
+        headers: resp_headers,
+        body: Body::from(body_bytes),
+    })
 }
 
 #[cfg(test)]
@@ -1095,7 +1291,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(result.0, axum::http::StatusCode::OK);
+        assert_eq!(result.status, axum::http::StatusCode::OK);
 
         let headers = received.recv().await.unwrap();
         assert_eq!(headers["x-api-key"], "overridden-upstream-key");
