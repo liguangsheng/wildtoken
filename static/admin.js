@@ -3077,33 +3077,62 @@ function formatHttpSnapshot(snapshot) {
   }
 
   const status = snapshot.status_code ?? snapshot.status;
-  const firstLine = snapshot.method
-    ? `${snapshot.method || "-"} ${snapshot.url || "-"}`
-    : `HTTP ${status ?? "-"}`;
-  const lines = [firstLine, ""];
-  const headers = snapshot.headers || {};
-  lines.push("Headers");
-  lines.push(Object.keys(headers).length ? JSON.stringify(headers, null, 2) : "(none)");
+  const headers = { ...(snapshot.headers || {}) };
+  let firstLine;
+
+  if (snapshot.method) {
+    let target = snapshot.url || "/";
+    try {
+      const url = new URL(snapshot.url);
+      target = `${url.pathname || "/"}${url.search}`;
+      if (!Object.keys(headers).some((name) => name.toLowerCase() === "host")) {
+        headers.host = url.host;
+      }
+    } catch {
+      // Older logs may have a non-absolute URL. Keep the recorded target intact.
+    }
+    firstLine = `${snapshot.method} ${target} HTTP/1.1`;
+  } else {
+    const reason = {
+      200: "OK",
+      201: "Created",
+      202: "Accepted",
+      204: "No Content",
+      400: "Bad Request",
+      401: "Unauthorized",
+      403: "Forbidden",
+      404: "Not Found",
+      429: "Too Many Requests",
+      500: "Internal Server Error",
+      502: "Bad Gateway",
+      503: "Service Unavailable",
+      504: "Gateway Timeout",
+    }[status];
+    firstLine = `HTTP/1.1 ${status ?? "-"}${reason ? ` ${reason}` : ""}`;
+  }
+
+  const lines = [firstLine];
+  for (const [name, value] of Object.entries(headers).sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`${name}: ${value}`);
+  }
   lines.push("");
 
   const normalized = normalizeSnapshotBody(snapshot.body);
-  const headingBody = {
-    encoding: normalized.encoding,
-    byte_length: normalized.byte_length,
-    truncated: normalized.truncated,
-  };
-  lines.push(formatBodyHeading(headingBody));
-
   if (normalized.kind === "cleared") {
-    lines.push("日志正文已按保留策略清理，仅保留方法、URL 和 Headers。请查看较新的日志以获得完整正文。");
+    lines.push("[Body cleared by retention policy]");
   } else if (normalized.kind === "missing") {
-    lines.push("<empty body>");
+    // No content follows the HTTP header terminator.
   } else if (normalized.kind === "empty") {
-    lines.push("<empty body>");
+    // No content follows the HTTP header terminator.
   } else if (normalized.kind === "base64") {
+    lines.push(`[Binary body encoded as base64; ${normalized.byte_length ?? 0} bytes captured]`);
     lines.push(normalized.base64 || "");
   } else {
     lines.push(prettyBodyText(normalized.text || ""));
+  }
+  if (normalized.truncated) {
+    lines.push("");
+    lines.push(`[Body truncated; original length: ${normalized.byte_length ?? "unknown"} bytes]`);
   }
   return lines.join("\n");
 }
