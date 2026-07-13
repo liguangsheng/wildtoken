@@ -66,7 +66,10 @@ impl FromRequestParts<AppState> for AdminAuth {
 /// the `api_tokens` table (enabled tokens only).
 ///
 /// Returns an OpenAI-compatible error body on failure.
-pub struct DownstreamAuth;
+pub struct DownstreamAuth {
+    pub token_id: i64,
+    pub token_name: String,
+}
 
 pub struct DownstreamAuthRejection {
     anthropic: bool,
@@ -133,8 +136,8 @@ impl FromRequestParts<AppState> for DownstreamAuth {
             ""
         };
 
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT id FROM api_tokens WHERE token = ? AND enabled = 1")
+        let row: Option<(i64, String)> =
+            sqlx::query_as("SELECT id, name FROM api_tokens WHERE token = ? AND enabled = 1")
                 .bind(token)
                 .fetch_optional(&state.db)
                 .await
@@ -152,6 +155,10 @@ impl FromRequestParts<AppState> for DownstreamAuth {
             });
         }
 
-        Ok(DownstreamAuth)
+        let (token_id, token_name) = row.expect("validated token row must be present");
+        Ok(DownstreamAuth {
+            token_id,
+            token_name,
+        })
     }
 }

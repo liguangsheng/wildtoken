@@ -13,6 +13,8 @@ struct LogListRow {
     created_at: String,
     method: String,
     path: String,
+    downstream_token_id: Option<i64>,
+    downstream_token_name: Option<String>,
     upstream_id: Option<i64>,
     upstream_name: Option<String>,
     model: Option<String>,
@@ -33,6 +35,8 @@ struct LogDetailRow {
     created_at: String,
     method: String,
     path: String,
+    downstream_token_id: Option<i64>,
+    downstream_token_name: Option<String>,
     upstream_id: Option<i64>,
     upstream_name: Option<String>,
     model: Option<String>,
@@ -103,6 +107,7 @@ pub async fn list_logs(
 ) -> Result<(Vec<RequestLogOut>, i64), AppError> {
     let mut query = QueryBuilder::<Sqlite>::new(
         "SELECT id, created_at, method, path,
+                downstream_token_id, downstream_token_name,
                 upstream_id, upstream_name, model, reasoning_effort,
                 stream, status_code,
                 prompt_tokens, completion_tokens, total_tokens,
@@ -126,6 +131,8 @@ pub async fn list_logs(
             created_at: r.created_at,
             method: r.method,
             path: r.path,
+            downstream_token_id: r.downstream_token_id,
+            downstream_token_name: r.downstream_token_name,
             upstream_id: r.upstream_id,
             upstream_name: r.upstream_name,
             model: r.model,
@@ -156,6 +163,7 @@ pub async fn get_log_detail(
 ) -> Result<Option<RequestLogDetailOut>, AppError> {
     let row: Option<LogDetailRow> = sqlx::query_as(
         r#"SELECT id, created_at, method, path,
+                  downstream_token_id, downstream_token_name,
                   upstream_id, upstream_name, model, reasoning_effort,
                   stream, status_code,
                   prompt_tokens, completion_tokens, total_tokens,
@@ -176,6 +184,8 @@ pub async fn get_log_detail(
             created_at: r.created_at,
             method: r.method,
             path: r.path,
+            downstream_token_id: r.downstream_token_id,
+            downstream_token_name: r.downstream_token_name,
             upstream_id: r.upstream_id,
             upstream_name: r.upstream_name,
             model: r.model,

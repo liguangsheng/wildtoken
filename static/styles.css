@@ -913,7 +913,7 @@ table {
 }
 
 .log-table {
-  min-width: 1040px;
+  min-width: 1140px;
 }
 
 .token-table {
@@ -4003,6 +4003,7 @@ html[data-density="compact"] button:not(.status-switch):not(.toast-close):not(.i
 }
 
 .log-table.col-hide-channel [data-col="channel"],
+.log-table.col-hide-token [data-col="token"],
 .log-table.col-hide-model [data-col="model"],
 .log-table.col-hide-reasoning [data-col="reasoning"],
 .log-table.col-hide-duration [data-col="duration"],

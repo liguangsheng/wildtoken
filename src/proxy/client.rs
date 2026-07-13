@@ -432,6 +432,8 @@ pub async fn proxy_request(
     state: &AppState,
     backoff: &BackoffManager,
     upstream: &UpstreamRow,
+    downstream_token_id: i64,
+    downstream_token_name: &str,
     forward_model: Option<&str>,
     method: &str,
     path: &str,
@@ -496,6 +498,8 @@ pub async fn proxy_request(
             let log_entry = logging::LogEntry {
                 method: method.to_string(),
                 path: path.to_string(),
+                downstream_token_id: Some(downstream_token_id),
+                downstream_token_name: Some(downstream_token_name.to_string()),
                 upstream_id: Some(upstream.id),
                 upstream_name: Some(upstream.name.clone()),
                 model: forward_model.map(|s| s.to_string()),
@@ -535,6 +539,8 @@ pub async fn proxy_request(
             let log_entry = logging::LogEntry {
                 method: method.to_string(),
                 path: path.to_string(),
+                downstream_token_id: Some(downstream_token_id),
+                downstream_token_name: Some(downstream_token_name.to_string()),
                 upstream_id: Some(upstream.id),
                 upstream_name: Some(upstream.name.clone()),
                 model: forward_model.map(|s| s.to_string()),
@@ -589,6 +595,8 @@ pub async fn proxy_request(
     let log_entry = logging::LogEntry {
         method: method.to_string(),
         path: path.to_string(),
+        downstream_token_id: Some(downstream_token_id),
+        downstream_token_name: Some(downstream_token_name.to_string()),
         upstream_id: Some(upstream.id),
         upstream_name: Some(upstream.name.clone()),
         model: forward_model.map(|s| s.to_string()),

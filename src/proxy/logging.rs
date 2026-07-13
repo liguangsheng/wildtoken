@@ -9,6 +9,8 @@ use base64::Engine as _;
 pub struct LogEntry {
     pub method: String,
     pub path: String,
+    pub downstream_token_id: Option<i64>,
+    pub downstream_token_name: Option<String>,
     pub upstream_id: Option<i64>,
     pub upstream_name: Option<String>,
     pub model: Option<String>,
@@ -230,18 +232,21 @@ async fn insert_log_entry(
 
     sqlx::query(
         r#"INSERT INTO request_logs
-            (method, path, upstream_id, upstream_name, model,
+            (method, path, downstream_token_id, downstream_token_name,
+             upstream_id, upstream_name, model,
              reasoning_effort, stream, status_code,
              prompt_tokens, completion_tokens, total_tokens,
              duration_ms, first_token_ms, error,
              downstream_request, upstream_request,
              upstream_response, downstream_response,
              created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, datetime('now'))"#,
     )
     .bind(&entry.method)
     .bind(&entry.path)
+    .bind(entry.downstream_token_id)
+    .bind(&entry.downstream_token_name)
     .bind(entry.upstream_id)
     .bind(&entry.upstream_name)
     .bind(&entry.model)

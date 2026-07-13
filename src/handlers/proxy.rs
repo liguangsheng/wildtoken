@@ -119,6 +119,13 @@ impl ClientAbortLogGuard {
         }
     }
 
+    fn set_downstream_token(&mut self, token_id: i64, token_name: &str) {
+        if let Some(entry) = &mut self.entry {
+            entry.downstream_token_id = Some(token_id);
+            entry.downstream_token_name = Some(token_name.to_string());
+        }
+    }
+
     fn set_upstream(&mut self, upstream_id: i64, upstream_name: &str, forward_model: Option<&str>) {
         if let Some(entry) = &mut self.entry {
             entry.upstream_id = Some(upstream_id);
@@ -166,7 +173,7 @@ impl Drop for ClientAbortLogGuard {
 /// Main proxy handler – forwards OpenAI-compatible requests to upstream providers.
 pub async fn proxy_handler(
     State(state): State<AppState>,
-    _auth: DownstreamAuth,
+    auth: DownstreamAuth,
     req: Request<Body>,
 ) -> Result<Response, AppError> {
     let method = req.method().to_string();
@@ -183,6 +190,7 @@ pub async fn proxy_handler(
     let query = uri.query();
 
     let mut abort_log = ClientAbortLogGuard::new(&state.db, &method, path);
+    abort_log.set_downstream_token(auth.token_id, &auth.token_name);
 
     let body_bytes = match axum::body::to_bytes(req.into_body(), 50 * 1024 * 1024).await {
         Ok(body) => body,
@@ -255,6 +263,8 @@ pub async fn proxy_handler(
         &state,
         &state.backoff,
         &upstream,
+        auth.token_id,
+        &auth.token_name,
         forward_model.as_deref(),
         &method,
         path,

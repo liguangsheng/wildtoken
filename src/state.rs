@@ -120,6 +120,8 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at          TEXT NOT NULL DEFAULT (datetime('now')),
             method              TEXT NOT NULL,
             path                TEXT NOT NULL,
+            downstream_token_id INTEGER REFERENCES api_tokens(id) ON DELETE SET NULL,
+            downstream_token_name TEXT,
             upstream_id         INTEGER REFERENCES upstreams(id) ON DELETE SET NULL,
             upstream_name       TEXT,
             model               TEXT,
@@ -141,6 +143,27 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    for definition in [
+        "downstream_token_id INTEGER REFERENCES api_tokens(id) ON DELETE SET NULL",
+        "downstream_token_name TEXT",
+    ] {
+        let column = definition
+            .split_whitespace()
+            .next()
+            .expect("column definition must start with a name");
+        let exists: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('request_logs') WHERE name = ?",
+        )
+        .bind(column)
+        .fetch_optional(pool)
+        .await?;
+        if exists.is_none() {
+            sqlx::query(&format!("ALTER TABLE request_logs ADD COLUMN {definition}"))
+                .execute(pool)
+                .await?;
+        }
+    }
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at);",

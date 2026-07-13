@@ -656,6 +656,7 @@ const DEFAULT_UPSTREAM_COLUMNS = {
 const DEFAULT_LOG_COLUMNS = {
   time: true,
   channel: true,
+  token: true,
   model: true,
   reasoning: true,
   status: true,
@@ -680,6 +681,7 @@ const UPSTREAM_COL_LABELS = {
 const LOG_COL_LABELS = {
   time: "时间",
   channel: "渠道",
+  token: "令牌",
   model: "模型",
   reasoning: "思考强度",
   status: "状态码",
@@ -2821,20 +2823,20 @@ function renderLogRows(items, options = {}) {
   logRows.innerHTML = "";
 
   if (logsLoading && !logsLoadedOnce) {
-    logRows.innerHTML = skeletonRowsMarkup(7, 6);
+    logRows.innerHTML = skeletonRowsMarkup(8, 6);
     return;
   }
 
   if (items.length === 0) {
     if (noMatch) {
-      logRows.innerHTML = noMatchStateCell(7, {
+      logRows.innerHTML = noMatchStateCell(8, {
         title: "无匹配日志",
         copy: "全库中没有符合当前筛选条件的日志。",
         actionLabel: "清除筛选",
         actionId: "clear-log-filters",
       });
     } else {
-      logRows.innerHTML = emptyStateCell(7, {
+      logRows.innerHTML = emptyStateCell(8, {
         title: emptyTitle,
         copy: emptyCopy,
         actionLabel: emptyActionLabel,
@@ -2868,6 +2870,7 @@ function renderLogRows(items, options = {}) {
         <span class="muted">#${log.id}</span>
       </td>
       <td class="channel-cell" data-col="channel">${channel}</td>
+      <td class="token-cell" data-col="token">${log.downstream_token_name ? `<span title="#${log.downstream_token_id ?? "-"}">${escapeHtml(log.downstream_token_name)}</span>` : "<span class=\"muted\">-</span>"}</td>
       <td class="model-cell" data-col="model">${log.model ? `<code title="${escapeHtml(log.model)}">${escapeHtml(log.model)}</code>` : "<span class=\"muted\">-</span>"}</td>
       <td class="col-reasoning" data-col="reasoning">
         ${log.reasoning_effort
