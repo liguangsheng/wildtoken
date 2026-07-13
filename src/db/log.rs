@@ -5,7 +5,7 @@ use crate::models::request_log::{
     RequestLogDetailOut, RequestLogOut, TokenUsageStatsOut, TokenUsageWindowOut,
 };
 
-const LOG_BODY_CLEANUP_BATCH_SIZE: i64 = 10;
+const LOG_BODY_CLEANUP_BATCH_SIZE: i64 = 4;
 const LOG_BODY_CLEANUP_BATCH_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
 
 // ── Internal query types (to avoid exceeding sqlx tuple limit) ──────────────
@@ -56,6 +56,17 @@ struct LogDetailRow {
     duration_ms: Option<i32>,
     first_token_ms: Option<i32>,
     error: Option<String>,
+    request_snapshot: Option<String>,
+    upstream_request_override: Option<String>,
+    upstream_request_is_override: i32,
+    response_snapshot: Option<String>,
+    downstream_response_override: Option<String>,
+    downstream_response_is_override: i32,
+}
+
+#[derive(Debug, FromRow)]
+struct LogBodyCleanupRow {
+    request_log_id: i64,
     request_snapshot: Option<String>,
     upstream_request_override: Option<String>,
     upstream_request_is_override: i32,
@@ -326,7 +337,7 @@ pub async fn clear_old_log_bodies(pool: &SqlitePool, keep_count: i64) -> Result<
     loop {
         let affected =
             clear_old_log_bodies_batch(pool, keep_count, LOG_BODY_CLEANUP_BATCH_SIZE).await?;
-        if affected == 0 {
+        if affected == 0 || affected < LOG_BODY_CLEANUP_BATCH_SIZE as u64 {
             break;
         }
 
@@ -341,75 +352,90 @@ async fn clear_old_log_bodies_batch(
     keep_count: i64,
     batch_size: i64,
 ) -> Result<u64, AppError> {
-    let result = sqlx::query(
-        r#"WITH eligible AS (
-            SELECT p.request_log_id
-            FROM request_log_payloads AS p
-            WHERE p.bodies_cleared = 0
-              AND p.request_log_id NOT IN (
-                  SELECT id FROM request_logs
-                  ORDER BY created_at DESC, id DESC
-                  LIMIT ?
-              )
-            ORDER BY p.request_log_id
-            LIMIT ?
-        )
-        UPDATE request_log_payloads
-        SET request_snapshot = CASE
-                WHEN request_snapshot IS NULL OR request_snapshot = '' THEN request_snapshot
-                WHEN json_valid(request_snapshot) = 1 THEN CASE
-                    WHEN json_type(request_snapshot) = 'object' THEN CASE
-                        WHEN COALESCE(json_extract(request_snapshot, '$.body.cleared'), 0) = 1 THEN request_snapshot
-                        ELSE json_set(request_snapshot, '$.body', json('{"cleared":true}'))
-                    END
-                    ELSE '{"body":{"cleared":true}}'
-                END
-                ELSE '{"body":{"cleared":true}}'
-            END,
-            upstream_request_override = CASE
-                WHEN upstream_request_is_override = 0 THEN upstream_request_override
-                WHEN upstream_request_override IS NULL OR upstream_request_override = '' THEN upstream_request_override
-                WHEN json_valid(upstream_request_override) = 1 THEN CASE
-                    WHEN json_type(upstream_request_override) = 'object' THEN CASE
-                        WHEN COALESCE(json_extract(upstream_request_override, '$.body.cleared'), 0) = 1 THEN upstream_request_override
-                        ELSE json_set(upstream_request_override, '$.body', json('{"cleared":true}'))
-                    END
-                    ELSE '{"body":{"cleared":true}}'
-                END
-                ELSE '{"body":{"cleared":true}}'
-            END,
-            response_snapshot = CASE
-                WHEN response_snapshot IS NULL OR response_snapshot = '' THEN response_snapshot
-                WHEN json_valid(response_snapshot) = 1 THEN CASE
-                    WHEN json_type(response_snapshot) = 'object' THEN CASE
-                        WHEN COALESCE(json_extract(response_snapshot, '$.body.cleared'), 0) = 1 THEN response_snapshot
-                        ELSE json_set(response_snapshot, '$.body', json('{"cleared":true}'))
-                    END
-                    ELSE '{"body":{"cleared":true}}'
-                END
-                ELSE '{"body":{"cleared":true}}'
-            END,
-            downstream_response_override = CASE
-                WHEN downstream_response_is_override = 0 THEN downstream_response_override
-                WHEN downstream_response_override IS NULL OR downstream_response_override = '' THEN downstream_response_override
-                WHEN json_valid(downstream_response_override) = 1 THEN CASE
-                    WHEN json_type(downstream_response_override) = 'object' THEN CASE
-                        WHEN COALESCE(json_extract(downstream_response_override, '$.body.cleared'), 0) = 1 THEN downstream_response_override
-                        ELSE json_set(downstream_response_override, '$.body', json('{"cleared":true}'))
-                    END
-                    ELSE '{"body":{"cleared":true}}'
-                END
-                ELSE '{"body":{"cleared":true}}'
-            END,
-            bodies_cleared = 1
-        WHERE request_log_id IN (SELECT request_log_id FROM eligible)"#,
+    let rows: Vec<LogBodyCleanupRow> = sqlx::query_as(
+        r#"SELECT p.request_log_id,
+                  p.request_snapshot,
+                  p.upstream_request_override,
+                  p.upstream_request_is_override,
+                  p.response_snapshot,
+                  p.downstream_response_override,
+                  p.downstream_response_is_override
+           FROM request_log_payloads AS p
+           WHERE p.bodies_cleared = 0
+             AND p.request_log_id NOT IN (
+                 SELECT id FROM request_logs
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT ?
+             )
+           ORDER BY p.request_log_id
+           LIMIT ?"#,
     )
     .bind(keep_count)
     .bind(batch_size)
-    .execute(pool)
+    .fetch_all(pool)
     .await?;
 
-    Ok(result.rows_affected())
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let mut transaction = pool.begin().await?;
+    let count = rows.len() as u64;
+    for row in rows {
+        let request_snapshot = clear_snapshot_body(row.request_snapshot, true);
+        let upstream_request_override = clear_snapshot_body(
+            row.upstream_request_override,
+            row.upstream_request_is_override != 0,
+        );
+        let response_snapshot = clear_snapshot_body(row.response_snapshot, true);
+        let downstream_response_override = clear_snapshot_body(
+            row.downstream_response_override,
+            row.downstream_response_is_override != 0,
+        );
+
+        sqlx::query(
+            r#"UPDATE request_log_payloads
+               SET request_snapshot = ?,
+                   upstream_request_override = ?,
+                   response_snapshot = ?,
+                   downstream_response_override = ?,
+                   bodies_cleared = 1
+               WHERE request_log_id = ?"#,
+        )
+        .bind(request_snapshot)
+        .bind(upstream_request_override)
+        .bind(response_snapshot)
+        .bind(downstream_response_override)
+        .bind(row.request_log_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+
+    Ok(count)
+}
+
+fn clear_snapshot_body(snapshot: Option<String>, should_clear: bool) -> Option<String> {
+    let Some(snapshot) = snapshot else {
+        return None;
+    };
+    if !should_clear || snapshot.is_empty() {
+        return Some(snapshot);
+    }
+
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&snapshot) else {
+        return Some(r#"{"body":{"cleared":true}}"#.to_string());
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Some(r#"{"body":{"cleared":true}}"#.to_string());
+    };
+    object.insert(
+        "body".to_string(),
+        serde_json::json!({
+            "cleared": true,
+        }),
+    );
+    Some(value.to_string())
 }
 
 #[cfg(test)]
