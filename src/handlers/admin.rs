@@ -27,6 +27,9 @@ use crate::models::token::{ApiTokenDetailOut, ApiTokenIn};
 use crate::models::upstream::{
     UpstreamDetailOut, UpstreamEnabledIn, UpstreamIn, UpstreamPriorityIn, UpstreamUpdate,
 };
+use crate::proxy::client::{
+    apply_header_overrides, is_sensitive_header_name, validate_header_overrides,
+};
 use crate::state::{hash_admin_token, AppState};
 
 // ── URL helper (aligned with Python build_upstream_url) ───────────────────────
@@ -119,18 +122,15 @@ async fn fetch_models_for_target(
     extra_headers: &HashMap<String, String>,
     timeout_seconds: f64,
 ) -> Result<ModelListOut, AppError> {
+    validate_overrides(extra_headers)?;
     let target_url = build_url(base_url, "models", "");
     let mut req = client
         .get(&target_url)
         .timeout(std::time::Duration::from_secs_f64(timeout_seconds.max(1.0)));
 
-    for (k, v) in extra_headers {
+    let request_headers = build_channel_request_headers(HashMap::new(), api_key, extra_headers);
+    for (k, v) in &request_headers {
         req = req.header(k.as_str(), v.as_str());
-    }
-    if let Some(key) = api_key {
-        if !key.is_empty() {
-            req = req.header("Authorization", format!("Bearer {key}"));
-        }
     }
 
     let response = req
@@ -163,8 +163,65 @@ async fn fetch_models_for_target(
     Ok(ModelListOut { models })
 }
 
-fn parse_extra_headers(s: &str) -> HashMap<String, String> {
-    serde_json::from_str(s).unwrap_or_default()
+fn parse_extra_headers(s: &str) -> Result<HashMap<String, String>, AppError> {
+    serde_json::from_str(s).map_err(|error| {
+        AppError::BadRequest(format!("channel Header override JSON is invalid: {error}"))
+    })
+}
+
+/// Build headers for channel-related admin requests using the same precedence
+/// as normal proxy traffic: generated channel credentials first, configured
+/// Header overrides last.
+fn build_channel_request_headers(
+    mut headers: HashMap<String, String>,
+    api_key: Option<&str>,
+    overrides: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+        headers.insert("authorization".into(), format!("Bearer {key}"));
+    }
+    // Admin-side probes have no downstream request context. Client Header
+    // placeholders are therefore skipped while static overrides still apply.
+    apply_header_overrides(&mut headers, overrides, None);
+    headers
+}
+
+fn build_json_channel_request(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &serde_json::Value,
+    timeout: std::time::Duration,
+    headers: &HashMap<String, String>,
+) -> Result<reqwest::RequestBuilder, AppError> {
+    let mut request = client
+        .post(url)
+        .body(serde_json::to_vec(payload)?)
+        .timeout(timeout);
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    Ok(request)
+}
+
+fn validate_overrides(overrides: &HashMap<String, String>) -> Result<(), AppError> {
+    validate_header_overrides(overrides).map_err(AppError::BadRequest)
+}
+
+fn redact_header_preview(headers: &HashMap<String, String>) -> HashMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let sensitive = is_sensitive_header_name(name);
+            (
+                name.clone(),
+                if sensitive {
+                    "[redacted]".into()
+                } else {
+                    value.clone()
+                },
+            )
+        })
+        .collect()
 }
 
 // ── Health ───────────────────────────────────────────────────────────────────
@@ -432,8 +489,8 @@ pub async fn admin_get_upstream(
     let model_prefixes: Vec<String> = serde_json::from_str(&row.model_prefixes).unwrap_or_default();
     let model_mappings: HashMap<String, String> =
         serde_json::from_str(&row.model_mappings).unwrap_or_default();
-    let extra_headers: HashMap<String, String> =
-        serde_json::from_str(&row.extra_headers).unwrap_or_default();
+    let extra_headers = parse_extra_headers(&row.extra_headers)?;
+    validate_overrides(&extra_headers)?;
 
     Ok(Json(UpstreamDetailOut {
         id: row.id,
@@ -459,6 +516,7 @@ pub async fn admin_create_upstream(
     _auth: AdminAuth,
     Json(input): Json<UpstreamIn>,
 ) -> Result<Response, AppError> {
+    validate_overrides(&input.extra_headers)?;
     match upstream_db::create_upstream(
         &state.db,
         &input,
@@ -480,6 +538,7 @@ pub async fn admin_update_upstream(
     Path(id): Path<i64>,
     Json(input): Json<UpstreamUpdate>,
 ) -> Result<Json<crate::models::upstream::UpstreamOut>, AppError> {
+    validate_overrides(&input.base.extra_headers)?;
     if upstream_db::get_upstream(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound("upstream not found".into()));
     }
@@ -556,14 +615,12 @@ pub async fn admin_test_upstream(
             row.timeout_seconds.max(1.0),
         ));
 
-    let extra = parse_extra_headers(&row.extra_headers);
-    for (k, v) in &extra {
+    let overrides = parse_extra_headers(&row.extra_headers)?;
+    validate_overrides(&overrides)?;
+    let request_headers =
+        build_channel_request_headers(HashMap::new(), row.api_key.as_deref(), &overrides);
+    for (k, v) in &request_headers {
         req = req.header(k.as_str(), v.as_str());
-    }
-    if let Some(ref key) = row.api_key {
-        if !key.is_empty() {
-            req = req.header("Authorization", format!("Bearer {key}"));
-        }
     }
 
     match req.send().await {
@@ -640,29 +697,26 @@ pub async fn admin_test_upstream_model(
         }),
         _ => unreachable!(),
     };
-    let mut request_headers = if template.name == "Codex" {
+    let default_headers = if template.name == "Codex" {
         codex_model_test_headers()
     } else {
         HashMap::from([("content-type".into(), "application/json".into())])
     };
-    for (key, value) in parse_extra_headers(&row.extra_headers) {
-        request_headers.insert(key, value);
-    }
-    let mut req = state.http_client.post(&target_url).json(&payload).timeout(
+    let overrides = parse_extra_headers(&row.extra_headers)?;
+    validate_overrides(&overrides)?;
+    let request_headers =
+        build_channel_request_headers(default_headers, row.api_key.as_deref(), &overrides);
+    // Use an explicit body instead of RequestBuilder::json(). The latter adds
+    // Content-Type before our loop, and RequestBuilder::header() would append a
+    // configured override instead of replacing that implicit value.
+    let req = build_json_channel_request(
+        &state.http_client,
+        &target_url,
+        &payload,
         std::time::Duration::from_secs_f64(row.timeout_seconds.max(1.0)),
-    );
-    for (key, value) in &request_headers {
-        req = req.header(key, value);
-    }
-    let auth_preview = if row.api_key.as_deref().is_some_and(|key| !key.is_empty()) {
-        "Bearer [configured upstream key]"
-    } else {
-        "[not configured]"
-    };
-    if let Some(key) = row.api_key.filter(|key| !key.is_empty()) {
-        req = req.header("Authorization", format!("Bearer {key}"));
-    }
-    request_headers.insert("authorization".into(), auth_preview.into());
+        &request_headers,
+    )?;
+    let request_headers_preview = redact_header_preview(&request_headers);
     match req.send().await {
         Ok(response) => {
             let status = response.status().as_u16();
@@ -698,7 +752,7 @@ pub async fn admin_test_upstream_model(
                 "content_type": content_type,
                 "response_headers": response_headers,
                 "prompt": prompt,
-                "request": { "url": target_url, "headers": request_headers, "body": payload },
+                "request": { "url": target_url, "headers": request_headers_preview, "body": payload },
                 "reply": reply,
                 "preview": preview,
             })))
@@ -719,7 +773,7 @@ pub async fn admin_fetch_upstream_models(
     let row = upstream_db::get_upstream(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("upstream not found".into()))?;
-    let extra = parse_extra_headers(&row.extra_headers);
+    let extra = parse_extra_headers(&row.extra_headers)?;
     let out = fetch_models_for_target(
         &state.http_client,
         &row.base_url,
@@ -738,6 +792,7 @@ pub async fn admin_fetch_models_preview(
 ) -> Result<Json<ModelListOut>, AppError> {
     let empty = HashMap::new();
     let extra = data.extra_headers.as_ref().unwrap_or(&empty);
+    validate_overrides(extra)?;
     let timeout = data
         .timeout_seconds
         .unwrap_or(state.settings.upstream.default_timeout_seconds);
@@ -761,7 +816,8 @@ pub async fn admin_fetch_upstream_balance(
         .await?
         .ok_or_else(|| AppError::NotFound("upstream not found".into()))?;
 
-    let extra = parse_extra_headers(&row.extra_headers);
+    let extra = parse_extra_headers(&row.extra_headers)?;
+    validate_overrides(&extra)?;
     let timeout = std::time::Duration::from_secs_f64(row.timeout_seconds.max(1.0));
     let subscription_url = build_url(&row.base_url, "dashboard/billing/subscription", "");
     let usage_url = build_url(
@@ -770,14 +826,11 @@ pub async fn admin_fetch_upstream_balance(
         "start_date=2020-01-01&end_date=2099-12-31",
     );
 
+    let request_headers =
+        build_channel_request_headers(HashMap::new(), row.api_key.as_deref(), &extra);
     let mut sub_req = state.http_client.get(&subscription_url).timeout(timeout);
-    for (k, v) in &extra {
+    for (k, v) in &request_headers {
         sub_req = sub_req.header(k.as_str(), v.as_str());
-    }
-    if let Some(ref key) = row.api_key {
-        if !key.is_empty() {
-            sub_req = sub_req.header("Authorization", format!("Bearer {key}"));
-        }
     }
 
     let sub_response = match sub_req.send().await {
@@ -809,13 +862,8 @@ pub async fn admin_fetch_upstream_balance(
 
     let mut used_usd: Option<f64> = None;
     let mut usage_req = state.http_client.get(&usage_url).timeout(timeout);
-    for (k, v) in &extra {
+    for (k, v) in &request_headers {
         usage_req = usage_req.header(k.as_str(), v.as_str());
-    }
-    if let Some(ref key) = row.api_key {
-        if !key.is_empty() {
-            usage_req = usage_req.header("Authorization", format!("Bearer {key}"));
-        }
     }
     if let Ok(usage_response) = usage_req.send().await {
         if usage_response.status().as_u16() == 200 {
@@ -1016,4 +1064,79 @@ pub async fn admin_get_log_detail(
         .await?
         .ok_or_else(|| AppError::NotFound("request log not found".into()))?;
     Ok(Json(detail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_channel_request_headers, build_json_channel_request, redact_header_preview};
+    use std::collections::HashMap;
+
+    #[test]
+    fn admin_channel_requests_apply_overrides_after_api_key_and_defaults() {
+        let defaults = HashMap::from([
+            ("content-type".into(), "application/json".into()),
+            ("user-agent".into(), "default-agent".into()),
+        ]);
+        let overrides = HashMap::from([
+            ("AUTHORIZATION".into(), "Token overridden".into()),
+            ("User-Agent".into(), "channel-agent".into()),
+            ("X-Client-Agent".into(), "{client_header:User-Agent}".into()),
+        ]);
+
+        let headers = build_channel_request_headers(defaults, Some("channel-api-key"), &overrides);
+
+        assert_eq!(headers["authorization"], "Token overridden");
+        assert_eq!(headers["user-agent"], "channel-agent");
+        assert_eq!(headers["content-type"], "application/json");
+        assert!(!headers.contains_key("x-client-agent"));
+        assert_eq!(
+            headers
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("authorization"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn admin_header_preview_redacts_case_insensitive_credentials() {
+        let headers = HashMap::from([
+            ("AUTHORIZATION".into(), "secret-auth".into()),
+            ("api-key".into(), "secret-api-key".into()),
+            ("X-API-Key".into(), "secret-key".into()),
+            ("X-Custom-Token".into(), "secret-token".into()),
+            ("x-trace-id".into(), "trace-123".into()),
+        ]);
+
+        let preview = redact_header_preview(&headers);
+
+        assert_eq!(preview["AUTHORIZATION"], "[redacted]");
+        assert_eq!(preview["api-key"], "[redacted]");
+        assert_eq!(preview["X-API-Key"], "[redacted]");
+        assert_eq!(preview["X-Custom-Token"], "[redacted]");
+        assert_eq!(preview["x-trace-id"], "trace-123");
+    }
+
+    #[test]
+    fn model_test_request_has_one_overridden_content_type() {
+        let headers = HashMap::from([("content-type".into(), "application/custom+json".into())]);
+        let request = build_json_channel_request(
+            &reqwest::Client::new(),
+            "https://example.test/v1/responses",
+            &serde_json::json!({"model": "test"}),
+            std::time::Duration::from_secs(1),
+            &headers,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let values: Vec<_> = request
+            .headers()
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], "application/custom+json");
+    }
 }

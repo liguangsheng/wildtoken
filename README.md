@@ -56,6 +56,19 @@ APP__SERVER__PORT=3100 DATABASE_URL='sqlite:wildtoken.db?mode=rwc' cargo run
 
 如果渠道配置了 API Key，WildToken 会把转发请求的 `Authorization` 改为该渠道的 Key。请求体、路径、查询参数和方法会按原样转发；如果配置了模型映射，转发时会重写请求体中的 `model`。
 
+每个渠道还可以在管理界面的「高级设置」中配置 Header 覆盖。例如：
+
+```json
+{
+  "User-Agent": "{client_header:User-Agent}",
+  "X-Provider-Route": "premium"
+}
+```
+
+Header 名大小写不敏感，配置值会在下游请求头、协议默认头和渠道 API Key 之后写入，因此同名 Header 以渠道配置为准。值完全写成 `{client_header:<Header-Name>}` 时，会读取对应下游 Header；下游没有该值时跳过这条覆盖。出于凭证隔离要求，不能读取下游 `Authorization` 或 `x-api-key`。
+
+`Host`、`Content-Length` 等传输头以及 `X-WildToken-Upstream` 内部路由头不可覆盖。静态覆盖同时用于正常转发、渠道测试、模型拉取、模型测试和余额查询；`client_header` 占位符仅在正常转发有下游请求上下文时生效。
+
 调用 `/v1/*` 需要携带令牌管理页中启用的下游令牌。
 
 `POST /v1/messages` 兼容 Anthropic Messages API：可用标准的 `x-api-key` 下游令牌和 `anthropic-version` 请求头。请求、响应和 SSE 事件均原样透传；为此类请求配置渠道 API Key 时，WildToken 会向上游使用 `x-api-key`，并在未指定时补充 `anthropic-version: 2023-06-01`。因此该渠道的 Base URL 应指向 Anthropic 兼容上游（例如 `https://api.anthropic.com`）。

@@ -22,13 +22,36 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "proxy-authorization",
     "proxy-authenticate",
     "x-wildtoken-upstream",
-    // This is a downstream Anthropic credential. Never leak it to an upstream.
-    "x-api-key",
 ];
+
+/// Credentials accepted from downstream clients but never forwarded as-is.
+///
+/// Keep these separate from `HOP_BY_HOP_HEADERS`: the selected channel may
+/// legitimately inject or override `x-api-key` for an Anthropic upstream.
+const DOWNSTREAM_CREDENTIAL_HEADERS: &[&str] = &["authorization", "x-api-key"];
+
+/// Headers whose transport semantics cannot safely be controlled by a channel
+/// override. `x-wildtoken-upstream` is internal routing metadata.
+const NON_OVERRIDABLE_HEADERS: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "host",
+    "content-length",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-authorization",
+    "proxy-authenticate",
+    "x-wildtoken-upstream",
+];
+
+const CLIENT_HEADER_PLACEHOLDER_PREFIX: &str = "{client_header:";
 
 /// Headers whose values should be redacted in logging context.
 pub const LOG_REDACTED_HEADERS: &[&str] = &[
     "authorization",
+    "api-key",
     "x-api-key",
     "cookie",
     "set-cookie",
@@ -40,6 +63,31 @@ pub const LOG_REDACTED_HEADERS: &[&str] = &[
     "x-goog-api-key",
     "x-amz-security-token",
 ];
+
+pub(crate) fn is_sensitive_header_name(name: &str) -> bool {
+    if LOG_REDACTED_HEADERS
+        .iter()
+        .any(|header| name.eq_ignore_ascii_case(header))
+    {
+        return true;
+    }
+
+    name.to_ascii_lowercase().split(['-', '_']).any(|part| {
+        matches!(
+            part,
+            "auth"
+                | "authorization"
+                | "apikey"
+                | "credential"
+                | "credentials"
+                | "key"
+                | "secret"
+                | "signature"
+                | "token"
+                | "cookie"
+        )
+    })
+}
 
 // ── URL building ─────────────────────────────────────────────────────────────
 
@@ -67,6 +115,113 @@ pub fn build_upstream_url(
 
 // ── Header forwarding ───────────────────────────────────────────────────────
 
+fn parse_client_header_placeholder(value: &str) -> Result<Option<&str>, ()> {
+    if let Some(rest) = value.strip_prefix(CLIENT_HEADER_PLACEHOLDER_PREFIX) {
+        let source = rest.strip_suffix('}').filter(|source| !source.is_empty());
+        return source.map(Some).ok_or(());
+    }
+    if value.contains(CLIENT_HEADER_PLACEHOLDER_PREFIX) {
+        return Err(());
+    }
+    Ok(None)
+}
+
+fn connection_nominated_headers(
+    headers: &axum::http::HeaderMap,
+) -> std::collections::HashSet<String> {
+    headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Validate a channel Header override map before it is persisted or used by an
+/// admin preview request.
+pub(crate) fn validate_header_overrides(overrides: &HashMap<String, String>) -> Result<(), String> {
+    let mut normalized_names = std::collections::HashSet::new();
+
+    for (name, value) in overrides {
+        let normalized = name.to_ascii_lowercase();
+        if axum::http::HeaderName::from_bytes(name.as_bytes()).is_err() {
+            return Err(format!("invalid Header name: {name}"));
+        }
+        match parse_client_header_placeholder(value) {
+            Ok(Some(source)) => {
+                let source_normalized = source.to_ascii_lowercase();
+                if axum::http::HeaderName::from_bytes(source.as_bytes()).is_err() {
+                    return Err(format!(
+                        "invalid client Header placeholder for {name}: {source}"
+                    ));
+                }
+                if DOWNSTREAM_CREDENTIAL_HEADERS.contains(&source_normalized.as_str()) {
+                    return Err(format!(
+                        "client credential Header {source} cannot be used in an override"
+                    ));
+                }
+                if NON_OVERRIDABLE_HEADERS.contains(&source_normalized.as_str()) {
+                    return Err(format!(
+                        "client Header {source} cannot be used in an override"
+                    ));
+                }
+            }
+            Ok(None) => {
+                if axum::http::HeaderValue::from_bytes(value.as_bytes()).is_err() {
+                    return Err(format!("invalid value for Header {name}"));
+                }
+            }
+            Err(()) => {
+                return Err(format!(
+                    "invalid client Header placeholder for {name}; it must occupy the whole value"
+                ));
+            }
+        }
+        if NON_OVERRIDABLE_HEADERS.contains(&normalized.as_str()) {
+            return Err(format!("Header {name} cannot be overridden"));
+        }
+        if !normalized_names.insert(normalized) {
+            return Err(format!(
+                "duplicate Header name with different casing: {name}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply configured Header overrides last, using HTTP's case-insensitive name
+/// semantics. Callers must validate user input before persisting it.
+pub(crate) fn apply_header_overrides(
+    headers: &mut HashMap<String, String>,
+    overrides: &HashMap<String, String>,
+    downstream_headers: Option<&axum::http::HeaderMap>,
+) {
+    let connection_nominated = downstream_headers
+        .map(connection_nominated_headers)
+        .unwrap_or_default();
+    for (name, value) in overrides {
+        let resolved = match parse_client_header_placeholder(value) {
+            Ok(Some(source)) if !connection_nominated.contains(&source.to_ascii_lowercase()) => {
+                downstream_headers
+                    .and_then(|downstream| downstream.get(source))
+                    .and_then(|value| value.to_str().ok())
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+            }
+            Ok(Some(_)) => None,
+            Ok(None) => Some(value.clone()),
+            Err(()) => None,
+        };
+        if let Some(resolved) = resolved {
+            headers.insert(name.to_ascii_lowercase(), resolved);
+        }
+    }
+}
+
 /// Build forward headers: filter hop-by-hop, inject api_key, merge extra_headers.
 ///
 /// Header names are normalized to lowercase so we never emit case-duplicate keys
@@ -79,16 +234,20 @@ pub fn build_forward_headers(
     downstream_headers: &axum::http::HeaderMap,
     upstream: &UpstreamRow,
     path: &str,
-) -> HashMap<String, String> {
+) -> Result<HashMap<String, String>, AppError> {
     let mut out = HashMap::new();
+    let connection_nominated = connection_nominated_headers(downstream_headers);
 
     for (name, value) in downstream_headers.iter() {
         let name_lower = name.as_str().to_lowercase();
-        if HOP_BY_HOP_HEADERS.contains(&name_lower.as_str()) {
+        if HOP_BY_HOP_HEADERS.contains(&name_lower.as_str())
+            || connection_nominated.contains(&name_lower)
+        {
             continue;
         }
-        // Never forward the client's credentials; replace with upstream key below.
-        if name_lower == "authorization" {
+        // Never forward the client's credentials; replace them below from the
+        // selected channel configuration.
+        if DOWNSTREAM_CREDENTIAL_HEADERS.contains(&name_lower.as_str()) {
             continue;
         }
         if let Ok(v) = value.to_str() {
@@ -117,13 +276,29 @@ pub fn build_forward_headers(
     }
 
     // Merge extra_headers last so they can override (normalize keys too).
-    if let Ok(extra) = serde_json::from_str::<HashMap<String, String>>(&upstream.extra_headers) {
-        for (k, v) in extra {
-            out.insert(k.to_lowercase(), v);
-        }
+    let extra = serde_json::from_str::<HashMap<String, String>>(&upstream.extra_headers).map_err(
+        |error| {
+            AppError::UpstreamError(format!(
+                "channel {} has invalid Header override JSON: {error}",
+                upstream.name
+            ))
+        },
+    )?;
+    validate_header_overrides(&extra).map_err(|message| {
+        AppError::UpstreamError(format!(
+            "channel {} has an invalid Header override: {message}",
+            upstream.name
+        ))
+    })?;
+    apply_header_overrides(&mut out, &extra, Some(downstream_headers));
+
+    // A channel override must not reintroduce a field explicitly nominated by
+    // the downstream Connection header as hop-by-hop.
+    for name in connection_nominated {
+        out.remove(&name);
     }
 
-    out
+    Ok(out)
 }
 
 // ── SSE / token helpers ─────────────────────────────────────────────────────
@@ -478,7 +653,7 @@ pub async fn proxy_request(
     let reasoning_effort = extract_reasoning_effort(body);
 
     let url = build_upstream_url(upstream, path, query_params);
-    let fwd_headers = build_forward_headers(downstream_headers, upstream, path);
+    let fwd_headers = build_forward_headers(downstream_headers, upstream, path)?;
     let log_body_max_bytes = state.runtime_settings.read().await.log_body_max_bytes as usize;
 
     let downstream_snap =
@@ -501,7 +676,7 @@ pub async fn proxy_request(
 
     for (k, v) in &fwd_headers {
         let kl = k.to_lowercase();
-        if HOP_BY_HOP_HEADERS.contains(&kl.as_str()) || kl == "content-length" || kl == "host" {
+        if HOP_BY_HOP_HEADERS.contains(&kl.as_str()) {
             continue;
         }
         req_builder = req_builder.header(k.as_str(), v.as_str());
@@ -661,10 +836,48 @@ pub async fn proxy_request(
 mod tests {
     use super::{
         build_forward_headers, extract_first_token_ms, extract_usage, prepare_upstream_body,
+        proxy_request, validate_header_overrides,
     };
-    use crate::models::upstream::UpstreamRow;
-    use axum::http::{HeaderMap, HeaderValue};
+    use crate::{
+        config::Settings,
+        models::{
+            settings::{AdminCredential, RuntimeSettings},
+            upstream::UpstreamRow,
+        },
+        proxy::matcher::BackoffManager,
+        state::{init_db, AppState},
+    };
+    use axum::{
+        http::{HeaderMap, HeaderValue},
+        routing::post,
+        Json, Router,
+    };
     use serde_json::json;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::{
+        collections::HashMap,
+        sync::{atomic::AtomicI64, Arc},
+        time::Instant,
+    };
+    use tokio::sync::RwLock;
+
+    fn upstream_with_headers(path_base: String, extra_headers: serde_json::Value) -> UpstreamRow {
+        UpstreamRow {
+            id: 1,
+            name: "test-channel".into(),
+            base_url: path_base,
+            api_key: Some("upstream-secret".into()),
+            model_names: "[]".into(),
+            model_prefixes: "[]".into(),
+            model_mappings: "{}".into(),
+            priority: 100,
+            enabled: 1,
+            extra_headers: extra_headers.to_string(),
+            timeout_seconds: 30.0,
+            created_at: "".into(),
+            updated_at: "".into(),
+        }
+    }
 
     #[test]
     fn streaming_chat_request_includes_usage_and_preserves_options() {
@@ -714,23 +927,9 @@ mod tests {
     fn anthropic_messages_uses_upstream_x_api_key_and_hides_downstream_key() {
         let mut downstream = HeaderMap::new();
         downstream.insert("x-api-key", HeaderValue::from_static("downstream-secret"));
-        let upstream = UpstreamRow {
-            id: 1,
-            name: "anthropic".into(),
-            base_url: "https://api.anthropic.com".into(),
-            api_key: Some("upstream-secret".into()),
-            model_names: "[]".into(),
-            model_prefixes: "[]".into(),
-            model_mappings: "{}".into(),
-            priority: 100,
-            enabled: 1,
-            extra_headers: "{}".into(),
-            timeout_seconds: 30.0,
-            created_at: "".into(),
-            updated_at: "".into(),
-        };
+        let upstream = upstream_with_headers("https://api.anthropic.com".into(), json!({}));
 
-        let headers = build_forward_headers(&downstream, &upstream, "messages");
+        let headers = build_forward_headers(&downstream, &upstream, "messages").unwrap();
         assert_eq!(
             headers.get("x-api-key"),
             Some(&"upstream-secret".to_string())
@@ -743,6 +942,173 @@ mod tests {
     }
 
     #[test]
+    fn channel_headers_override_downstream_and_generated_credentials_case_insensitively() {
+        let mut downstream = HeaderMap::new();
+        downstream.insert("user-agent", HeaderValue::from_static("downstream-agent"));
+        downstream.insert("x-request-id", HeaderValue::from_static("request-123"));
+        downstream.insert(
+            "authorization",
+            HeaderValue::from_static("downstream-secret"),
+        );
+        let upstream = upstream_with_headers(
+            "https://example.test".into(),
+            json!({
+                "UsEr-AgEnT": "channel-agent",
+                "AUTHORIZATION": "Token channel-credential",
+                "X-Trace-Id": "channel-trace",
+                "X-Upstream-Request": "{client_header:X-Request-Id}",
+                "X-Missing": "{client_header:X-Not-Present}"
+            }),
+        );
+
+        let headers = build_forward_headers(&downstream, &upstream, "responses").unwrap();
+
+        assert_eq!(headers.get("user-agent"), Some(&"channel-agent".into()));
+        assert_eq!(
+            headers.get("authorization"),
+            Some(&"Token channel-credential".into())
+        );
+        assert_eq!(headers.get("x-trace-id"), Some(&"channel-trace".into()));
+        assert_eq!(
+            headers.get("x-upstream-request"),
+            Some(&"request-123".into())
+        );
+        assert!(!headers.contains_key("x-missing"));
+        assert_eq!(
+            headers
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("authorization"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn header_override_validation_rejects_ambiguous_or_transport_headers() {
+        let duplicate = HashMap::from([
+            ("Authorization".into(), "one".into()),
+            ("authorization".into(), "two".into()),
+        ]);
+        assert!(validate_header_overrides(&duplicate)
+            .unwrap_err()
+            .contains("duplicate Header"));
+
+        for overrides in [
+            HashMap::from([("Host".into(), "example.test".into())]),
+            HashMap::from([("Connection".into(), "keep-alive".into())]),
+            HashMap::from([("X-Test".into(), "one\r\ntwo".into())]),
+            HashMap::from([(
+                "X-Test".into(),
+                "prefix-{client_header:X-Request-Id}".into(),
+            )]),
+            HashMap::from([("X-Test".into(), "{client_header:Authorization}".into())]),
+        ] {
+            assert!(validate_header_overrides(&overrides).is_err());
+        }
+    }
+
+    #[test]
+    fn connection_nominated_headers_are_not_forwarded_or_reintroduced() {
+        let mut downstream = HeaderMap::new();
+        downstream.insert("connection", HeaderValue::from_static("x-hop, keep-alive"));
+        downstream.insert("x-hop", HeaderValue::from_static("downstream-value"));
+        let upstream = upstream_with_headers(
+            "https://example.test".into(),
+            json!({
+                "X-Hop": "channel-value",
+                "X-Remapped-Hop": "{client_header:X-Hop}",
+                "X-End-To-End": "kept"
+            }),
+        );
+
+        let headers = build_forward_headers(&downstream, &upstream, "responses").unwrap();
+
+        assert!(!headers.contains_key("connection"));
+        assert!(!headers.contains_key("x-hop"));
+        assert!(!headers.contains_key("x-remapped-hop"));
+        assert_eq!(headers["x-end-to-end"], "kept");
+    }
+
+    #[tokio::test]
+    async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
+        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move |headers: HeaderMap| {
+                let sent = sent.clone();
+                async move {
+                    sent.send(headers).unwrap();
+                    Json(json!({"ok": true}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        let state = AppState {
+            db,
+            http_client: reqwest::Client::new(),
+            settings: Settings::default(),
+            backoff: Arc::new(BackoffManager::new()),
+            runtime_settings: Arc::new(RwLock::new(RuntimeSettings::default())),
+            admin_credential: Arc::new(RwLock::new(AdminCredential {
+                credential_hash: "test".into(),
+                credential_version: 1,
+            })),
+            admin_credential_version: Arc::new(AtomicI64::new(1)),
+            started_at: Instant::now(),
+        };
+        let upstream = upstream_with_headers(
+            format!("http://{address}"),
+            json!({
+                "X-API-Key": "overridden-upstream-key",
+                "Anthropic-Version": "2025-01-01",
+                "User-Agent": "channel-agent",
+                "X-Client-Request": "{client_header:X-Request-Id}"
+            }),
+        );
+        let mut downstream = HeaderMap::new();
+        downstream.insert("x-api-key", HeaderValue::from_static("downstream-secret"));
+        downstream.insert("user-agent", HeaderValue::from_static("downstream-agent"));
+        downstream.insert("x-request-id", HeaderValue::from_static("request-456"));
+
+        let result = proxy_request(
+            &state,
+            &state.backoff,
+            &upstream,
+            1,
+            "test-token",
+            "test-client",
+            None,
+            "POST",
+            "messages",
+            None,
+            &downstream,
+            br#"{"model":"test"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, axum::http::StatusCode::OK);
+
+        let headers = received.recv().await.unwrap();
+        assert_eq!(headers["x-api-key"], "overridden-upstream-key");
+        assert_eq!(headers["anthropic-version"], "2025-01-01");
+        assert_eq!(headers["user-agent"], "channel-agent");
+        assert_eq!(headers["x-client-request"], "request-456");
+        assert_eq!(headers["accept-encoding"], "identity");
+        assert!(headers.get("authorization").is_none());
+
+        server.abort();
+    }
+
+    #[test]
     fn anthropic_content_delta_counts_as_first_token() {
         let event = b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n";
         assert_eq!(extract_first_token_ms(event), Some(0));
@@ -750,7 +1116,8 @@ mod tests {
 
     #[test]
     fn responses_custom_tool_call_delta_counts_as_first_token() {
-        let event = b"data: {\"type\":\"response.custom_tool_call_input.delta\",\"delta\":\"const\"}\n\n";
+        let event =
+            b"data: {\"type\":\"response.custom_tool_call_input.delta\",\"delta\":\"const\"}\n\n";
         assert_eq!(extract_first_token_ms(event), Some(0));
     }
 }

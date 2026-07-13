@@ -248,7 +248,13 @@ pub async fn proxy_handler(
     abort_log.set_upstream(upstream.id, &upstream.name, forward_model.as_deref());
     let log_body_max_bytes = state.runtime_settings.read().await.log_body_max_bytes as usize;
     let upstream_url = client::build_upstream_url(&upstream, path, query);
-    let fwd_headers = client::build_forward_headers(&headers, &upstream, path);
+    let fwd_headers = match client::build_forward_headers(&headers, &upstream, path) {
+        Ok(headers) => headers,
+        Err(error) => {
+            abort_log.log_and_disarm(502, error.to_string());
+            return Err(error);
+        }
+    };
     let downstream_snap = logging::snapshot_request(
         &method,
         &upstream_url,

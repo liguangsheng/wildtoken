@@ -235,6 +235,7 @@ const fields = {
   enabled: document.querySelector("#enabled"),
   clearApiKey: document.querySelector("#clear-api-key"),
 };
+let persistedFormApiKey = null;
 
 // ── 令牌管理 ────────────────────────────────────────────────
 const tokenRows = document.querySelector("#token-rows");
@@ -1668,7 +1669,7 @@ async function api(path, options = {}) {
     let message = `${response.status} ${response.statusText}`;
     try {
       const data = await response.json();
-      message = data.detail || data.error?.message || message;
+      message = data.detail || data.error?.message || data.error || message;
     } catch (_) {
       // Keep the HTTP status message.
     }
@@ -2034,13 +2035,101 @@ function requestRotationConfirm() {
   });
 }
 
-function payloadFromForm() {
-  let extraHeaders;
+const NON_OVERRIDABLE_CHANNEL_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "host",
+  "content-length",
+  "te",
+  "trailer",
+  "upgrade",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "x-wildtoken-upstream",
+]);
+const DOWNSTREAM_CREDENTIAL_HEADERS = new Set(["authorization", "x-api-key"]);
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const CLIENT_HEADER_PLACEHOLDER_PATTERN = /^\{client_header:([^{}]+)\}$/;
+
+function parseHeaderOverrides(value = fields.extraHeaders.value) {
+  let parsed;
   try {
-    extraHeaders = JSON.parse(fields.extraHeaders.value || "{}");
+    parsed = JSON.parse(value || "{}");
   } catch (error) {
-    throw new Error(`额外请求头不是合法 JSON: ${error.message}`);
+    setAdvancedSettingsOpen(true);
+    fields.extraHeaders.focus();
+    throw new Error(`Header 覆盖不是合法 JSON：${error.message}`);
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    setAdvancedSettingsOpen(true);
+    fields.extraHeaders.focus();
+    throw new Error("Header 覆盖必须是由 Header 名和字符串值组成的 JSON 对象。");
+  }
+
+  const normalized = Object.create(null);
+  for (const [name, headerValue] of Object.entries(parsed)) {
+    if (!HEADER_NAME_PATTERN.test(name)) {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header 名无效：${name || "（空）"}`);
+    }
+    if (typeof headerValue !== "string") {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header ${name} 的值必须是字符串。`);
+    }
+    if (/[\x00-\x08\x0a-\x1f\x7f]/.test(headerValue)) {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header ${name} 的值包含非法控制字符。`);
+    }
+
+    const normalizedName = name.toLowerCase();
+    if (NON_OVERRIDABLE_CHANNEL_HEADERS.has(normalizedName)) {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header ${name} 属于传输或内部路由头，不能覆盖。`);
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, normalizedName)) {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header 名大小写重复：${name}`);
+    }
+
+    const placeholder = headerValue.match(CLIENT_HEADER_PLACEHOLDER_PATTERN);
+    if (headerValue.includes("{client_header:") && !placeholder) {
+      setAdvancedSettingsOpen(true);
+      fields.extraHeaders.focus();
+      throw new Error(`Header ${name} 的 client_header 占位符必须占满整个值。`);
+    }
+    if (placeholder) {
+      const sourceName = placeholder[1];
+      const normalizedSource = sourceName.toLowerCase();
+      if (!HEADER_NAME_PATTERN.test(sourceName)) {
+        setAdvancedSettingsOpen(true);
+        fields.extraHeaders.focus();
+        throw new Error(`client_header 来源 Header 名无效：${sourceName}`);
+      }
+      if (DOWNSTREAM_CREDENTIAL_HEADERS.has(normalizedSource)) {
+        setAdvancedSettingsOpen(true);
+        fields.extraHeaders.focus();
+        throw new Error(`不能通过 client_header 读取下游凭证 Header：${sourceName}`);
+      }
+      if (NON_OVERRIDABLE_CHANNEL_HEADERS.has(normalizedSource)) {
+        setAdvancedSettingsOpen(true);
+        fields.extraHeaders.focus();
+        throw new Error(`不能通过 client_header 读取传输或内部 Header：${sourceName}`);
+      }
+    }
+    normalized[normalizedName] = headerValue;
+  }
+
+  return normalized;
+}
+
+function payloadFromForm() {
+  const extraHeaders = parseHeaderOverrides();
   const modelMappings = parseModelMappings(fields.modelMappings.value);
   return {
     name: fields.name.value.trim(),
@@ -2174,6 +2263,7 @@ async function editUpstream(upstream) {
     fields.name.value = detail.name;
     fields.baseUrl.value = detail.base_url;
     fields.apiKey.value = detail.api_key || "";
+    persistedFormApiKey = detail.api_key || null;
     fields.modelNames.value = joinList(detail.model_names);
     fields.modelPrefixes.value = joinList(detail.model_prefixes);
     fields.modelMappings.value = joinModelMappings(detail.model_mappings);
@@ -2256,6 +2346,7 @@ async function showBalance(upstream) {
 function resetForm() {
   form.reset();
   fields.id.value = "";
+  persistedFormApiKey = null;
   fields.priority.value = 100;
   fields.timeoutSeconds.value = 300;
   fields.modelMappings.value = "";
@@ -3430,14 +3521,18 @@ async function fetchModelsFromForm() {
 
   let extraHeaders;
   try {
-    extraHeaders = JSON.parse(fields.extraHeaders.value || "{}");
+    extraHeaders = parseHeaderOverrides();
   } catch (error) {
-    setStatus(`额外请求头不是合法 JSON: ${error.message}`, "error");
+    setStatus(error.message, "error");
     return;
   }
 
   const draftUpstream = { name: fields.name.value.trim() || baseUrl, model_names: [] };
   const selectedNames = splitList(fields.modelNames.value);
+  const enteredApiKey = fields.apiKey.value.trim();
+  const previewApiKey = fields.clearApiKey.checked
+    ? null
+    : enteredApiKey || persistedFormApiKey;
   const originalText = fetchModelsButton.textContent;
   fetchModelsButton.disabled = true;
   fetchModelsButton.textContent = "拉取中";
@@ -3447,7 +3542,7 @@ async function fetchModelsFromForm() {
       method: "POST",
       body: JSON.stringify({
         base_url: baseUrl,
-        api_key: fields.apiKey.value.trim() || null,
+        api_key: previewApiKey || null,
         extra_headers: extraHeaders,
         timeout_seconds: Number(fields.timeoutSeconds.value || 300),
       }),
@@ -3850,12 +3945,6 @@ quickImportFillButton.addEventListener("click", () => {
 });
 
 fetchModelsButton.addEventListener("click", async () => {
-  const id = Number(fields.id.value);
-  const upstream = upstreams.find((item) => item.id === id);
-  if (upstream) {
-    await fetchModelsForUpstream(upstream, "form", fetchModelsButton, splitList(fields.modelNames.value));
-    return;
-  }
   await fetchModelsFromForm();
 });
 

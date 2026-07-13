@@ -491,12 +491,21 @@
             <summary>
               <span>
                 <span class="section-title">高级设置</span>
-                <span class="section-copy">额外请求头 JSON</span>
+                <span class="section-copy">Header 覆盖 JSON</span>
               </span>
             </summary>
             <label class="field">
-              <span class="field-label">额外请求头 JSON</span>
-              <textarea id="extra-headers" rows="5" spellcheck="false">{}</textarea>
+              <span class="field-label">Header 覆盖（JSON）</span>
+              <textarea
+                id="extra-headers"
+                rows="5"
+                spellcheck="false"
+                aria-describedby="extra-headers-hint"
+                placeholder='{"User-Agent":"WildToken/1.0"}'
+              >{}</textarea>
+              <span id="extra-headers-hint" class="field-hint">
+                Header 名大小写不敏感；这里的值最后写入，可覆盖下游请求头和渠道 API Key 生成的认证头。用 {client_header:User-Agent} 可读取同名下游 Header。Host、Content-Length 等传输头不可覆盖。
+              </span>
             </label>
           </details>
         </div>

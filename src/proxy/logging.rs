@@ -94,9 +94,7 @@ fn redact_headers(
     headers
         .iter()
         .map(|(k, v)| {
-            let sensitive = super::client::LOG_REDACTED_HEADERS
-                .iter()
-                .any(|header| k.eq_ignore_ascii_case(header));
+            let sensitive = super::client::is_sensitive_header_name(k);
             (k.as_str(), if sensitive { "***REDACTED***" } else { v })
         })
         .collect()
@@ -150,7 +148,9 @@ mod tests {
         let headers = HashMap::from([
             ("aUtHoRiZaTiOn".to_string(), "Bearer secret".to_string()),
             ("sEt-CoOkIe".to_string(), "session=secret".to_string()),
+            ("Api-Key".to_string(), "api-secret".to_string()),
             ("X-aCcEsS-tOkEn".to_string(), "access-secret".to_string()),
+            ("X-Custom-Secret".to_string(), "custom-secret".to_string()),
             (
                 "PrOxY-aUtHoRiZaTiOn".to_string(),
                 "proxy-secret".to_string(),
@@ -165,7 +165,9 @@ mod tests {
             let snapshot_headers = &snapshot["headers"];
             assert_eq!(snapshot_headers["aUtHoRiZaTiOn"], "***REDACTED***");
             assert_eq!(snapshot_headers["sEt-CoOkIe"], "***REDACTED***");
+            assert_eq!(snapshot_headers["Api-Key"], "***REDACTED***");
             assert_eq!(snapshot_headers["X-aCcEsS-tOkEn"], "***REDACTED***");
+            assert_eq!(snapshot_headers["X-Custom-Secret"], "***REDACTED***");
             assert_eq!(snapshot_headers["PrOxY-aUtHoRiZaTiOn"], "***REDACTED***");
             assert_eq!(snapshot_headers["X-Request-Id"], "request-123");
         }
