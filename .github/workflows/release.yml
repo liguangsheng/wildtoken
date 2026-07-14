@@ -1,0 +1,406 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  prepare:
+    name: Resolve release tag
+    runs-on: ubuntu-22.04
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Validate tag and package version
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$REF_NAME"
+          fi
+
+          git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+          commit="$(git rev-list -n 1 "$tag")"
+          git checkout --detach "$commit"
+
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wildtoken") | .version')"
+          if [[ "$tag" != "v$version" ]]; then
+            echo "Tag $tag does not match Cargo package version v$version" >&2
+            exit 1
+          fi
+
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test release source
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+  build-linux:
+    name: Build Linux x86_64
+    needs: [prepare, test]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build release binary
+        run: cargo build --locked --release --target x86_64-unknown-linux-gnu
+
+      - name: Reject unintended OpenSSL linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ldd target/x86_64-unknown-linux-gnu/release/wildtoken | grep -Eq 'libssl|libcrypto'; then
+            echo "Linux release unexpectedly links OpenSSL" >&2
+            exit 1
+          fi
+
+      - name: Package and smoke test
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          package="wildtoken-${RELEASE_TAG}-linux-x86_64"
+          mkdir -p "$package"
+          install -m 755 target/x86_64-unknown-linux-gnu/release/wildtoken "$package/wildtoken"
+          cp -R static config "$package/"
+          cp README.md .env.example "$package/"
+
+          pushd "$package" >/dev/null
+          APP__SERVER__PORT=3110 ADMIN_TOKEN=ci-admin-token ./wildtoken >"$RUNNER_TEMP/wildtoken-linux.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in {1..30}; do
+            if curl -fsS 'http://127.0.0.1:3110/health' >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS 'http://127.0.0.1:3110/health' >/dev/null
+          curl -fsS 'http://127.0.0.1:3110/admin' | grep -q 'WildToken Admin'
+          kill "$pid"
+          wait "$pid" || true
+          trap - EXIT
+          rm -f wildtoken.db wildtoken.db-shm wildtoken.db-wal
+          popd >/dev/null
+
+          tar -czf "${package}.tar.gz" "$package"
+          tar -tzf "${package}.tar.gz" >/dev/null
+
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x86_64
+          path: wildtoken-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: Build Windows x86_64
+    needs: [prepare, test]
+    runs-on: windows-2022
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release binary
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+
+      - name: Package and smoke test
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = "wildtoken-$env:RELEASE_TAG-windows-x86_64"
+          New-Item -ItemType Directory -Path $package | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/wildtoken.exe" "$package/wildtoken.exe"
+          Copy-Item static "$package/static" -Recurse
+          Copy-Item config "$package/config" -Recurse
+          Copy-Item README.md, .env.example $package
+
+          $env:APP__SERVER__PORT = "3110"
+          $env:ADMIN_TOKEN = "ci-admin-token"
+          $stdout = Join-Path $env:RUNNER_TEMP "wildtoken-windows.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "wildtoken-windows.stderr.log"
+          $process = Start-Process -FilePath (Resolve-Path "$package/wildtoken.exe") -WorkingDirectory $package -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            $healthy = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              try {
+                Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3110/health" | Out-Null
+                $healthy = $true
+                break
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $healthy) {
+              throw "WildToken did not become healthy"
+            }
+            $admin = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3110/admin"
+            if ($admin.Content -notmatch "WildToken Admin") {
+              throw "Admin page smoke test failed"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+              $process.WaitForExit()
+            }
+          }
+
+          Remove-Item "$package/wildtoken.db*" -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path $package -DestinationPath "$package.zip"
+          if (-not (Test-Path "$package.zip")) {
+            throw "Windows archive was not created"
+          }
+
+      - name: Upload Windows archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: wildtoken-*-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs: [prepare, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - arch: aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Smoke test architecture binary
+        shell: bash
+        env:
+          BINARY_PATH: target/${{ matrix.target }}/release/wildtoken
+        run: |
+          set -euo pipefail
+          APP__SERVER__PORT=3110 ADMIN_TOKEN=ci-admin-token "$BINARY_PATH" >"$RUNNER_TEMP/wildtoken-macos-${{ matrix.arch }}.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in {1..30}; do
+            if curl -fsS 'http://127.0.0.1:3110/health' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS 'http://127.0.0.1:3110/health' >/dev/null
+          curl -fsS 'http://127.0.0.1:3110/admin' | grep -q 'WildToken Admin'
+          kill "$pid"
+          wait "$pid" || true
+          trap - EXIT
+          rm -f wildtoken.db wildtoken.db-shm wildtoken.db-wal
+
+      - name: Upload architecture binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binary-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/wildtoken
+          if-no-files-found: error
+          retention-days: 1
+
+  package-macos:
+    name: Package macOS Universal
+    needs: [prepare, test, build-macos]
+    runs-on: macos-15
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Download Intel binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binary-x86_64
+          path: macos-binaries/x86_64
+
+      - name: Download Apple Silicon binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binary-aarch64
+          path: macos-binaries/aarch64
+
+      - name: Create, package, and smoke test universal binary
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          package="wildtoken-${RELEASE_TAG}-macos-universal"
+          mkdir -p "$package"
+          lipo -create \
+            macos-binaries/x86_64/wildtoken \
+            macos-binaries/aarch64/wildtoken \
+            -output "$package/wildtoken"
+          chmod 755 "$package/wildtoken"
+          lipo -verify_arch x86_64 arm64 "$package/wildtoken"
+          cp -R static config "$package/"
+          cp README.md .env.example "$package/"
+
+          pushd "$package" >/dev/null
+          APP__SERVER__PORT=3110 ADMIN_TOKEN=ci-admin-token ./wildtoken >"$RUNNER_TEMP/wildtoken-macos.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in {1..30}; do
+            if curl -fsS 'http://127.0.0.1:3110/health' >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS 'http://127.0.0.1:3110/health' >/dev/null
+          curl -fsS 'http://127.0.0.1:3110/admin' | grep -q 'WildToken Admin'
+          kill "$pid"
+          wait "$pid" || true
+          trap - EXIT
+          rm -f wildtoken.db wildtoken.db-shm wildtoken.db-wal
+          popd >/dev/null
+
+          tar -czf "${package}.tar.gz" "$package"
+          tar -tzf "${package}.tar.gz" >/dev/null
+
+      - name: Upload macOS archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-universal
+          path: wildtoken-*-macos-universal.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build-linux, build-windows, package-macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          mapfile -t archives < <(find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort)
+          if [[ "${#archives[@]}" -ne 3 ]]; then
+            printf 'Expected 3 release archives, found %s\n' "${#archives[@]}" >&2
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*.zip
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS

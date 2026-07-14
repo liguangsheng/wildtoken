@@ -13,7 +13,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src \
     && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release \
+    && cargo build --locked --release \
     && rm -rf src
 
 COPY src ./src
@@ -22,7 +22,7 @@ COPY config ./config
 
 # Force rebuild of the real binary after the dummy main above.
 RUN touch src/main.rs \
-    && cargo build --release \
+    && cargo build --locked --release \
     && strip target/release/wildtoken
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
