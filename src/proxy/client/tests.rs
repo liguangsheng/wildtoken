@@ -115,14 +115,17 @@ fn usage_option_is_not_added_to_other_or_non_streaming_requests() {
 
 #[test]
 fn extracts_usage_from_codex_responses_completion_event() {
-    let response = br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":99424,"output_tokens":440,"total_tokens":99864}}}
+    let response = br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":99424,"output_tokens":440,"total_tokens":99864,"input_tokens_details":{"cached_tokens":12000},"cache_creation_input_tokens":320,"output_tokens_details":{"reasoning_tokens":128}}}}
 
 "#;
 
-    assert_eq!(
-        extract_usage(response, "text/event-stream"),
-        (Some(99424), Some(440), Some(99864))
-    );
+    let usage = extract_usage(response, "text/event-stream");
+    assert_eq!(usage.prompt_tokens, Some(99424));
+    assert_eq!(usage.completion_tokens, Some(440));
+    assert_eq!(usage.total_tokens, Some(99864));
+    assert_eq!(usage.prompt_cached_tokens, Some(12000));
+    assert_eq!(usage.cache_creation_tokens, Some(320));
+    assert_eq!(usage.completion_reasoning_tokens, Some(128));
 }
 
 #[test]

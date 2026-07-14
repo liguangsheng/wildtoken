@@ -38,6 +38,9 @@ pub struct LogEntry {
     pub prompt_tokens: Option<i32>,
     pub completion_tokens: Option<i32>,
     pub total_tokens: Option<i32>,
+    pub prompt_cached_tokens: Option<i32>,
+    pub cache_creation_tokens: Option<i32>,
+    pub completion_reasoning_tokens: Option<i32>,
     pub first_token_ms: Option<i32>,
     pub duration_ms: Option<i32>,
     pub error: Option<String>,
@@ -349,6 +352,9 @@ mod tests {
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
                 total_tokens INTEGER,
+                prompt_cached_tokens INTEGER,
+                cache_creation_tokens INTEGER,
+                completion_reasoning_tokens INTEGER,
                 duration_ms INTEGER,
                 first_token_ms INTEGER,
                 error TEXT
@@ -398,6 +404,9 @@ mod tests {
                 upstream_request: Some(request.clone()),
                 upstream_response: Some(response.clone()),
                 downstream_response: None,
+                prompt_cached_tokens: Some(12),
+                cache_creation_tokens: Some(34),
+                completion_reasoning_tokens: Some(56),
                 ..LogEntry::default()
             },
         )
@@ -426,6 +435,15 @@ mod tests {
         assert_eq!(payload.3, Some(response.to_string()));
         assert_eq!(payload.4, None);
         assert_eq!(payload.5, 1);
+
+        let token_details: (Option<i32>, Option<i32>, Option<i32>) = sqlx::query_as(
+            r#"SELECT prompt_cached_tokens, cache_creation_tokens, completion_reasoning_tokens
+               FROM request_logs WHERE id = 1"#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(token_details, (Some(12), Some(34), Some(56)));
     }
 
     #[tokio::test]
@@ -744,8 +762,9 @@ async fn insert_log_batch(
              upstream_id, upstream_name, model,
              reasoning_effort, response_reasoning_effort, stream, status_code,
              prompt_tokens, completion_tokens, total_tokens,
+             prompt_cached_tokens, cache_creation_tokens, completion_reasoning_tokens,
              duration_ms, first_token_ms, error, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 datetime('now'))"#,
         )
         .bind(&entry.method)
@@ -763,6 +782,9 @@ async fn insert_log_batch(
         .bind(entry.prompt_tokens)
         .bind(entry.completion_tokens)
         .bind(entry.total_tokens)
+        .bind(entry.prompt_cached_tokens)
+        .bind(entry.cache_creation_tokens)
+        .bind(entry.completion_reasoning_tokens)
         .bind(entry.duration_ms)
         .bind(entry.first_token_ms)
         .bind(&entry.error)

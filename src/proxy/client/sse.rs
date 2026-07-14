@@ -10,7 +10,16 @@ use super::super::{
 use crate::state::RuntimeMetrics;
 
 type UpstreamByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
-type TokenUsage = (Option<i32>, Option<i32>, Option<i32>);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TokenUsage {
+    pub prompt_tokens: Option<i32>,
+    pub completion_tokens: Option<i32>,
+    pub total_tokens: Option<i32>,
+    pub prompt_cached_tokens: Option<i32>,
+    pub cache_creation_tokens: Option<i32>,
+    pub completion_reasoning_tokens: Option<i32>,
+}
 
 const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
 
@@ -111,7 +120,13 @@ fn sse_line_has_visible_token(line: &str) -> bool {
         .is_some_and(|obj| json_has_visible_token(&obj))
 }
 
-fn extract_usage_values(usage: &serde_json::Value) -> (Option<i32>, Option<i32>, Option<i32>) {
+fn usage_i32(value: Option<&serde_json::Value>) -> Option<i32> {
+    value
+        .and_then(|value| value.as_i64())
+        .map(|value| value as i32)
+}
+
+fn extract_usage_values(usage: &serde_json::Value) -> TokenUsage {
     let prompt = usage
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
@@ -127,7 +142,62 @@ fn extract_usage_values(usage: &serde_json::Value) -> (Option<i32>, Option<i32>,
         .and_then(|value| value.as_i64())
         .map(|value| value as i32);
 
-    (prompt, completion, total)
+    let prompt_cached = usage_i32(
+        usage
+            .get("prompt_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .or_else(|| {
+                usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+            })
+            .or_else(|| usage.get("cache_read_input_tokens"))
+            .or_else(|| usage.get("cache_read_tokens"))
+            .or_else(|| {
+                usage
+                    .get("input_token_details")
+                    .and_then(|details| details.get("cache_read"))
+            }),
+    );
+    let cache_creation = usage_i32(
+        usage
+            .get("cache_creation_input_tokens")
+            .or_else(|| usage.get("cache_creation_tokens"))
+            .or_else(|| {
+                usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cache_creation_tokens"))
+            })
+            .or_else(|| {
+                usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cache_creation"))
+            })
+            .or_else(|| {
+                usage
+                    .get("input_token_details")
+                    .and_then(|details| details.get("cache_creation"))
+            }),
+    );
+    let completion_reasoning = usage_i32(
+        usage
+            .get("completion_tokens_details")
+            .and_then(|details| details.get("reasoning_tokens"))
+            .or_else(|| {
+                usage
+                    .get("output_tokens_details")
+                    .and_then(|details| details.get("reasoning_tokens"))
+            }),
+    );
+
+    TokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
+        prompt_cached_tokens: prompt_cached,
+        cache_creation_tokens: cache_creation,
+        completion_reasoning_tokens: completion_reasoning,
+    }
 }
 
 fn usage_from_value(value: &serde_json::Value) -> Option<TokenUsage> {
@@ -155,20 +225,14 @@ fn response_reasoning_effort_from_value(value: &serde_json::Value) -> Option<Str
 
 /// Extract token usage from either SSE stream body or JSON body.
 ///
-/// Returns `(prompt_tokens, completion_tokens, total_tokens)`.
-pub fn extract_usage(
-    raw_body: &[u8],
-    content_type: &str,
-) -> (Option<i32>, Option<i32>, Option<i32>) {
+pub(crate) fn extract_usage(raw_body: &[u8], content_type: &str) -> TokenUsage {
     let text = match std::str::from_utf8(raw_body) {
         Ok(s) => s,
-        Err(_) => return (None, None, None),
+        Err(_) => return TokenUsage::default(),
     };
 
     if is_sse_content_type(content_type) || content_type.to_ascii_lowercase().contains("sse") {
-        let mut prompt = None;
-        let mut completion = None;
-        let mut total = None;
+        let mut usage = TokenUsage::default();
         for line in text.lines() {
             let line = line.trim();
             if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
@@ -176,13 +240,13 @@ pub fn extract_usage(
                     continue;
                 }
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(usage) = usage_from_value(&obj) {
-                        (prompt, completion, total) = usage;
+                    if let Some(found_usage) = usage_from_value(&obj) {
+                        usage = found_usage;
                     }
                 }
             }
         }
-        return (prompt, completion, total);
+        return usage;
     }
 
     if let Ok(obj) = serde_json::from_str::<serde_json::Value>(text) {
@@ -191,7 +255,7 @@ pub fn extract_usage(
         }
     }
 
-    (None, None, None)
+    TokenUsage::default()
 }
 
 pub(super) fn is_sse_content_type(content_type: &str) -> bool {
@@ -495,7 +559,7 @@ impl SseStreamState {
         };
 
         self.observation.finish(self.start);
-        let (prompt_tokens, completion_tokens, total_tokens) = self.observation.usage;
+        let token_usage = self.observation.usage;
         let response_snapshot = logging::snapshot_response_with_body_length(
             self.upstream_status,
             &self.response_headers,
@@ -506,9 +570,12 @@ impl SseStreamState {
 
         entry.status_code = Some(status_code);
         entry.response_reasoning_effort = self.observation.response_reasoning_effort.clone();
-        entry.prompt_tokens = prompt_tokens;
-        entry.completion_tokens = completion_tokens;
-        entry.total_tokens = total_tokens;
+        entry.prompt_tokens = token_usage.prompt_tokens;
+        entry.completion_tokens = token_usage.completion_tokens;
+        entry.total_tokens = token_usage.total_tokens;
+        entry.prompt_cached_tokens = token_usage.prompt_cached_tokens;
+        entry.cache_creation_tokens = token_usage.cache_creation_tokens;
+        entry.completion_reasoning_tokens = token_usage.completion_reasoning_tokens;
         entry.first_token_ms = self.observation.first_token_ms;
         entry.duration_ms = Some(self.start.elapsed().as_millis() as i32);
         entry.error = error;
@@ -558,7 +625,7 @@ impl Drop for SseStreamState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResponseCapture, SseObservation, MAX_SSE_EVENT_BYTES};
+    use super::{ResponseCapture, SseObservation, TokenUsage, MAX_SSE_EVENT_BYTES};
 
     #[test]
     fn response_capture_retains_only_the_configured_prefix() {
@@ -576,7 +643,7 @@ mod tests {
         let mut observation = SseObservation::default();
         let start = std::time::Instant::now();
         let first = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n";
-        let terminal = b"data: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"effort\":\"high\"},\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n";
+        let terminal = b"data: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"effort\":\"high\"},\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":3},\"cache_creation_input_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":2}}}}\n\n";
 
         let response = [first.as_slice(), terminal.as_slice()].concat();
         for chunk in response.chunks(3) {
@@ -586,7 +653,17 @@ mod tests {
 
         assert_eq!(capture.bytes.len(), 8);
         assert_eq!(capture.byte_length, first.len() + terminal.len());
-        assert_eq!(observation.usage, (Some(11), Some(7), Some(18)));
+        assert_eq!(
+            observation.usage,
+            TokenUsage {
+                prompt_tokens: Some(11),
+                completion_tokens: Some(7),
+                total_tokens: Some(18),
+                prompt_cached_tokens: Some(3),
+                cache_creation_tokens: Some(5),
+                completion_reasoning_tokens: Some(2),
+            }
+        );
         assert_eq!(
             observation.response_reasoning_effort.as_deref(),
             Some("high")

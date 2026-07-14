@@ -15,9 +15,10 @@ pub(crate) use headers::{
     apply_header_overrides, is_sensitive_header_name, validate_header_overrides,
 };
 pub use headers::{build_forward_headers, HOP_BY_HOP_HEADERS};
+pub use sse::extract_first_token_ms;
+pub(crate) use sse::extract_usage;
 #[cfg(test)]
 use sse::sse_bytes_line_is_terminal;
-pub use sse::{extract_first_token_ms, extract_usage};
 use sse::{
     extract_response_reasoning_effort, is_sse_content_type, read_response_body, SseStreamState,
 };
@@ -379,8 +380,7 @@ pub async fn proxy_request(
         log_body_max_bytes,
     );
 
-    let (prompt_tokens, completion_tokens, total_tokens) =
-        extract_usage(&body_bytes, &content_type);
+    let token_usage = extract_usage(&body_bytes, &content_type);
     let response_reasoning_effort = extract_response_reasoning_effort(&body_bytes, &content_type);
 
     let elapsed = start.elapsed();
@@ -407,9 +407,12 @@ pub async fn proxy_request(
         response_reasoning_effort,
         stream: is_stream,
         status_code: Some(status_u16 as i32),
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
+        prompt_tokens: token_usage.prompt_tokens,
+        completion_tokens: token_usage.completion_tokens,
+        total_tokens: token_usage.total_tokens,
+        prompt_cached_tokens: token_usage.prompt_cached_tokens,
+        cache_creation_tokens: token_usage.cache_creation_tokens,
+        completion_reasoning_tokens: token_usage.completion_reasoning_tokens,
         first_token_ms,
         duration_ms: Some(elapsed.as_millis() as i32),
         downstream_request: Some(downstream_snap),

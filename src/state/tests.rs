@@ -149,6 +149,9 @@ async fn initialization_creates_current_log_schema_without_legacy_payload_column
         "response_reasoning_effort",
         "downstream_token_id",
         "downstream_token_name",
+        "prompt_cached_tokens",
+        "cache_creation_tokens",
+        "completion_reasoning_tokens",
     ] {
         assert!(log_columns.iter().any(|name| name == column));
     }

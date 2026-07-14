@@ -1,4 +1,5 @@
 use axum::{
+    http::{header, HeaderValue},
     routing::{any, get, patch, post},
     Router,
 };
@@ -6,7 +7,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
+use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::config;
@@ -228,6 +232,13 @@ pub async fn run_server(
             get(handlers::admin::admin_get_log_detail),
         );
 
+    let static_service = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+        ))
+        .service(ServeDir::new("static"));
+
     let app = Router::new()
         .route("/health", get(handlers::admin::health_check))
         .route(
@@ -237,7 +248,7 @@ pub async fn run_server(
         .route("/admin", get(serve_admin_html))
         .route("/v1/models", get(handlers::proxy::list_models_handler))
         .route("/v1/{*path}", any(handlers::proxy::proxy_handler))
-        .nest_service("/static", tower_http::services::ServeDir::new("static"))
+        .nest_service("/static", static_service)
         .merge(admin_routes)
         .layer(TraceLayer::new_for_http())
         .layer(
@@ -271,6 +282,10 @@ async fn serve_html_file(path: &str) -> axum::response::Response {
     match tokio::fs::read_to_string(path).await {
         Ok(html) => axum::response::Response::builder()
             .header("content-type", "text/html; charset=utf-8")
+            .header(
+                header::CACHE_CONTROL,
+                "no-store, no-cache, must-revalidate, max-age=0",
+            )
             .body(axum::body::Body::from(html))
             .unwrap(),
         Err(_) => axum::response::Response::builder()

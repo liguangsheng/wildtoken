@@ -518,7 +518,7 @@ mod tests {
 
     const FIRST_EVENT: &[u8] = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n";
     const FINAL_EVENT_HEADER: &[u8] = b"event: response.completed\n";
-    const FINAL_EVENT_DATA: &[u8] = b"data: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"effort\":\"high\"},\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n";
+    const FINAL_EVENT_DATA: &[u8] = b"data: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"effort\":\"high\"},\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":3},\"cache_creation_input_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":2}}}}\n\n";
 
     async fn test_proxy_state(db: sqlx::SqlitePool, runtime_settings: RuntimeSettings) -> AppState {
         let runtime_metrics = Arc::new(RuntimeMetrics::new());
@@ -884,12 +884,17 @@ mod tests {
                         Option<i32>,
                         Option<i32>,
                         Option<i32>,
+                        Option<i32>,
+                        Option<i32>,
+                        Option<i32>,
                         Option<String>,
                         Option<String>,
                     ),
                 >(
                     r#"SELECT id, stream, status_code, prompt_tokens, completion_tokens,
-                              total_tokens, first_token_ms, response_reasoning_effort, error
+                              total_tokens, prompt_cached_tokens, cache_creation_tokens,
+                              completion_reasoning_tokens, first_token_ms,
+                              response_reasoning_effort, error
                        FROM request_logs"#,
                 )
                 .fetch_optional(&db)
@@ -907,9 +912,10 @@ mod tests {
         assert_eq!(log.1, 1);
         assert_eq!(log.2, Some(200));
         assert_eq!((log.3, log.4, log.5), (Some(11), Some(7), Some(18)));
-        assert!(log.6.is_some());
-        assert_eq!(log.7.as_deref(), Some("high"));
-        assert_eq!(log.8, None);
+        assert_eq!((log.6, log.7, log.8), (Some(3), Some(5), Some(2)));
+        assert!(log.9.is_some());
+        assert_eq!(log.10.as_deref(), Some("high"));
+        assert_eq!(log.11, None);
 
         let response_snapshot: String = sqlx::query_scalar(
             "SELECT response_snapshot FROM request_log_payloads WHERE request_log_id = ?",
@@ -1064,12 +1070,10 @@ mod tests {
         assert_eq!(first_json["data"][0]["id"], "gpt-4");
 
         // Bypass admin handlers so only the cache can keep the old list.
-        sqlx::query(
-            r#"UPDATE upstreams SET model_names = '["gpt-4","gpt-5"]' WHERE name = 'a'"#,
-        )
-        .execute(&db)
-        .await
-        .unwrap();
+        sqlx::query(r#"UPDATE upstreams SET model_names = '["gpt-4","gpt-5"]' WHERE name = 'a'"#)
+            .execute(&db)
+            .await
+            .unwrap();
 
         let cached = app
             .clone()

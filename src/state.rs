@@ -545,6 +545,9 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             prompt_tokens       INTEGER,
             completion_tokens   INTEGER,
             total_tokens        INTEGER,
+            prompt_cached_tokens INTEGER,
+            cache_creation_tokens INTEGER,
+            completion_reasoning_tokens INTEGER,
             duration_ms         INTEGER,
             first_token_ms      INTEGER,
             error               TEXT
@@ -553,6 +556,13 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    for column in [
+        "prompt_cached_tokens",
+        "cache_creation_tokens",
+        "completion_reasoning_tokens",
+    ] {
+        ensure_column(pool, "request_logs", column, "INTEGER").await?;
+    }
 
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS request_log_payloads (
