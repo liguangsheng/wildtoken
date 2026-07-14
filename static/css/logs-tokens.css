@@ -70,8 +70,10 @@
 /* ── Log detail ──────────────────────────────────────────── */
 
 .request-detail-grid {
+  align-items: start;
   display: grid;
   gap: 12px;
+  grid-auto-flow: dense;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -95,10 +97,11 @@
 .log-detail-meta {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .log-detail-meta-card {
+  align-content: start;
   background: var(--panel-subtle);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -126,6 +129,20 @@
 .log-detail-meta-card small {
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+.log-detail-route-card {
+  gap: 4px;
+}
+
+.log-detail-route-card strong {
+  font-size: var(--text-md);
+}
+
+.log-detail-route-request {
+  color: var(--text-secondary) !important;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs) !important;
 }
 
 .log-detail-meta-label {
@@ -170,6 +187,56 @@
 .log-detail-error-card,
 .log-detail-loading-card {
   grid-column: 1 / -1;
+}
+
+.log-detail-token-card {
+  background: var(--panel-subtle);
+  padding: 12px;
+}
+
+.log-detail-token-panel {
+  display: grid;
+  gap: 6px 20px;
+  /* Column flow: 输入/缓存读/缓存写 fill column 1, 输出/思考/总计 column 2. */
+  grid-auto-flow: column;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  margin-top: 8px;
+}
+
+.log-detail-token-metric {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.log-detail-token-metric small {
+  color: var(--muted);
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.log-detail-token-metric b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .log-detail-error-card {
@@ -261,6 +328,9 @@
 
 .log-detail-section[open] {
   border-color: var(--accent-border);
+  /* An expanded snapshot needs the whole dialog width; closed siblings
+     backfill the freed cell via grid-auto-flow: dense. */
+  grid-column: 1 / -1;
 }
 
 .log-detail-section[open] summary {

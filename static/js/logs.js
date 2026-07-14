@@ -22,6 +22,43 @@ function formatTokens(log) {
   `;
 }
 
+function formatTokensPerSecondLine(log) {
+  const rate = outputTokensPerSecond(log);
+  if (rate === null) {
+    return "";
+  }
+  const label = rate >= 100 ? String(Math.round(rate)) : rate.toFixed(1);
+  const tone = rate >= 20 ? "ok" : rate >= 8 ? "warn" : "danger";
+  return `<small><span class="duration-time ${tone}" title="输出吞吐 ${escapeHtml(label)} tokens/s">${escapeHtml(label)}</span> tokens/s</small>`;
+}
+
+function formatTokenDetailPanel(log) {
+  const part = (value) => (value === null || value === undefined ? "-" : value);
+  const metric = ([label, value, tone]) => `
+    <span class="log-detail-token-metric ${escapeHtml(tone)}">
+      <small>${escapeHtml(label)}</small>
+      <b>${part(value)}</b>
+    </span>
+  `;
+  // Column-flow panel: left column 输入/缓存读/缓存写, right column 输出/思考/总计.
+  const left = [
+    ["输入", log.prompt_tokens, "input"],
+    ["缓存读", log.prompt_cached_tokens, "cache-read"],
+    ["缓存写", log.cache_creation_tokens, "cache-write"],
+  ];
+  const right = [
+    ["输出", log.completion_tokens, "output"],
+    ["思考", log.completion_reasoning_tokens, "reasoning"],
+    ["总计", log.total_tokens, "total"],
+  ];
+  return `
+    <div class="log-detail-token-panel" aria-label="输入 缓存读取 缓存写入 输出 思考 总计 tokens">
+      ${left.map(metric).join("")}
+      ${right.map(metric).join("")}
+    </div>
+  `;
+}
+
 function formatSeconds(ms) {
   return ms === null || ms === undefined ? "-" : `${(ms / 1000).toFixed(1)}s`;
 }
@@ -444,8 +481,10 @@ function extractLogDetailError(detail) {
 }
 
 function formatLogDetailMeta(detail) {
-  const time = formatLogTimestamp(detail.created_at);
-  const channel = detail.upstream_name || "未匹配到渠道";
+  const channelName = detail.upstream_name || "未匹配到渠道";
+  const channel = detail.upstream_id === null || detail.upstream_id === undefined
+    ? channelName
+    : `#${detail.upstream_id} · ${channelName}`;
   const statusText = detail.status_code === null || detail.status_code === undefined
     ? "无响应"
     : `HTTP ${detail.status_code}`;
@@ -456,9 +495,8 @@ function formatLogDetailMeta(detail) {
       : detail.status_code >= 200 && detail.status_code < 300
         ? "ok"
         : "neutral";
-  const tokenParts = [detail.prompt_tokens, detail.completion_tokens, detail.total_tokens]
-    .map((value) => (value === null || value === undefined ? "-" : value));
-  const reasoning = formatReasoningEffort(detail.reasoning_effort, detail.response_reasoning_effort, { badge: false, fallback: "-" });
+  const reasoning = formatReasoningEffort(detail.reasoning_effort, detail.response_reasoning_effort, { badge: false, fallback: "" });
+  const modelLine = [escapeHtml(detail.model || "-"), reasoning].filter(Boolean).join(" · ");
   const streamLabel = detail.stream ? "流式" : "非流式";
   const extractedError = extractLogDetailError(detail);
   const statusErrorLine = extractedError
@@ -474,31 +512,24 @@ function formatLogDetailMeta(detail) {
     : "";
 
   return `
-    <div class="log-detail-meta-card">
-      <span class="log-detail-meta-label">时间</span>
-      <strong>${escapeHtml(time)}</strong>
-      <small>#${detail.id}</small>
-    </div>
-    <div class="log-detail-meta-card">
-      <span class="log-detail-meta-label">路由</span>
+    <div class="log-detail-meta-card log-detail-route-card">
+      <span class="log-detail-meta-label">请求路由</span>
       <strong title="${escapeHtml(channel)}">${escapeHtml(channel)}</strong>
-      <small title="${escapeHtml(detail.model || "-")}">${escapeHtml(detail.model || "-")}</small>
-    </div>
-    <div class="log-detail-meta-card">
-      <span class="log-detail-meta-label">请求</span>
-      <strong>${escapeHtml(detail.method)} /${escapeHtml(detail.path)}</strong>
-      <small>${escapeHtml(streamLabel)} · 思考强度 ${reasoning}</small>
+      <small title="${modelLine}">${modelLine}</small>
+      <small class="log-detail-route-request" title="${escapeHtml(detail.method)} /${escapeHtml(detail.path)} · ${escapeHtml(streamLabel)}">
+        ${escapeHtml(detail.method)} /${escapeHtml(detail.path)} · ${escapeHtml(streamLabel)}
+      </small>
     </div>
     <div class="log-detail-meta-card">
       <span class="log-detail-meta-label">状态与耗时</span>
       <strong><span class="log-detail-status ${statusTone}">${escapeHtml(statusText)}</span></strong>
       <small>首字 ${formatFirstTokenTime(detail.first_token_ms)} · 总耗时 ${formatTotalDurationTime(detail)}</small>
+      ${formatTokensPerSecondLine(detail)}
       ${statusErrorLine}
     </div>
-    <div class="log-detail-meta-card">
+    <div class="log-detail-meta-card log-detail-token-card">
       <span class="log-detail-meta-label">Tokens</span>
-      <strong>${tokenParts.join(" / ")}</strong>
-      <small>输入 / 输出 / 总计</small>
+      ${formatTokenDetailPanel(detail)}
     </div>
     ${errorCard}
   `;
@@ -631,8 +662,8 @@ async function showLogDetail(logId) {
     const time = formatLogTimestamp(detail.created_at);
     const channel = detail.upstream_name || "未匹配到渠道";
     const status = detail.status_code === null ? "无响应" : `HTTP ${detail.status_code}`;
-    logDetailTitle.textContent = `请求详情 #${detail.id}`;
-    logDetailSummary.textContent = `${time} · ${channel} · ${detail.model || "-"} · ${status}`;
+    logDetailTitle.textContent = "请求详情";
+    logDetailSummary.textContent = `#${detail.id} · ${time} · ${channel} · ${detail.model || "-"} · ${status}`;
     if (logDetailMeta) {
       logDetailMeta.innerHTML = formatLogDetailMeta(detail);
     }

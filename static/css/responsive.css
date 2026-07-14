@@ -1,5 +1,14 @@
 /* ── Responsive ──────────────────────────────────────────── */
 
+/* Between these widths the meta cards are narrow thirds of the row: let the
+   timing line wrap instead of ellipsizing. */
+@media (min-width: 761px) and (max-width: 1100px) {
+  .log-detail-meta-card small {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}
+
 @media (max-width: 760px) {
   html,
   body {
@@ -548,6 +557,12 @@
   .log-detail-head,
   .log-detail-meta-card {
     padding: 10px;
+  }
+
+  .log-detail-token-panel {
+    grid-auto-flow: row;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
   }
 
   .log-detail-section summary {
