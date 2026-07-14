@@ -130,7 +130,8 @@ jobs:
           mkdir -p "$package"
           install -m 755 target/x86_64-unknown-linux-gnu/release/wildtoken "$package/wildtoken"
           cp -R static config "$package/"
-          cp README.md .env.example "$package/"
+          cp .env.example "$package/"
+          test ! -e "$package/README.md"
 
           pushd "$package" >/dev/null
           APP__SERVER__PORT=3110 ADMIN_TOKEN=ci-admin-token ./wildtoken >"$RUNNER_TEMP/wildtoken-linux.log" 2>&1 &
@@ -191,7 +192,10 @@ jobs:
           Copy-Item "target/x86_64-pc-windows-msvc/release/wildtoken.exe" "$package/wildtoken.exe"
           Copy-Item static "$package/static" -Recurse
           Copy-Item config "$package/config" -Recurse
-          Copy-Item README.md, .env.example $package
+          Copy-Item .env.example $package
+          if (Test-Path "$package/README.md") {
+            throw "README.md must not be included in the release archive"
+          }
 
           $env:APP__SERVER__PORT = "3110"
           $env:ADMIN_TOKEN = "ci-admin-token"
@@ -335,7 +339,8 @@ jobs:
           chmod 755 "$package/wildtoken"
           lipo "$package/wildtoken" -verify_arch x86_64 arm64
           cp -R static config "$package/"
-          cp README.md .env.example "$package/"
+          cp .env.example "$package/"
+          test ! -e "$package/README.md"
 
           pushd "$package" >/dev/null
           APP__SERVER__PORT=3110 ADMIN_TOKEN=ci-admin-token ./wildtoken >"$RUNNER_TEMP/wildtoken-macos.log" 2>&1 &
