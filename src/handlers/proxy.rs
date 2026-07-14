@@ -426,11 +426,48 @@ fn openai_models_list_response(ids: Vec<String>) -> serde_json::Value {
     })
 }
 
-/// GET /v1/models — aggregate model list from all enabled upstreams.
+async fn resolve_enabled_upstream_for_models(
+    pool: &sqlx::SqlitePool,
+    selector: &str,
+) -> Result<UpstreamRow, AppError> {
+    if let Ok(id) = selector.parse::<i64>() {
+        if let Some(upstream) = crate::db::upstream::get_upstream(pool, id).await? {
+            if upstream.enabled == 1 {
+                return Ok(upstream);
+            }
+        }
+    }
+
+    if let Some(upstream) = crate::db::upstream::get_upstream_by_name(pool, selector).await? {
+        if upstream.enabled == 1 {
+            return Ok(upstream);
+        }
+    }
+
+    Err(AppError::NotFound(format!(
+        "upstream not found or disabled: {selector}"
+    )))
+}
+
+/// GET /v1/models — aggregate model list from enabled upstream configs.
+///
+/// Optional channel filter via `X-WildToken-Upstream` or `?upstream=` (name or id).
+/// Filtered responses skip the global models-list cache.
+/// `model_prefixes` never expand into concrete ids.
 pub async fn list_models_handler(
     State(state): State<AppState>,
     _auth: DownstreamAuth,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let selector = get_upstream_selector(&headers, uri.query());
+
+    if let Some(selector) = selector {
+        let upstream = resolve_enabled_upstream_for_models(&state.db, &selector).await?;
+        let ids = aggregate_model_ids(std::slice::from_ref(&upstream));
+        return Ok(Json(openai_models_list_response(ids)));
+    }
+
     if let Some(cached) = state.models_list_cache.get().await {
         return Ok(Json(cached));
     }
@@ -1070,5 +1107,133 @@ mod tests {
             .map(|item| item["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["gpt-4", "gpt-5"]);
+    }
+
+    #[tokio::test]
+    async fn list_models_handler_filters_by_upstream_query_and_header() {
+        let db = proxy_test_database().await;
+        sqlx::query(
+            r#"INSERT INTO upstreams
+               (name, base_url, model_names, model_prefixes, model_mappings, priority, weight, enabled)
+               VALUES
+               ('alpha', 'http://example.com', '["alpha-1"]', '[]', '{}', 100, 100, 1),
+               ('beta', 'http://example.com', '["beta-1"]', '[]', '{}', 100, 100, 1),
+               ('off', 'http://example.com', '["off-1"]', '[]', '{}', 100, 100, 0)"#,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let state = test_proxy_state(db, RuntimeSettings::default()).await;
+        let app = Router::new()
+            .route("/v1/models", axum::routing::get(list_models_handler))
+            .with_state(state);
+
+        let by_name = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models?upstream=beta")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_name.status(), StatusCode::OK);
+        let by_name_body = to_bytes(by_name.into_body(), 1024 * 1024).await.unwrap();
+        let by_name_json: serde_json::Value = serde_json::from_slice(&by_name_body).unwrap();
+        assert_eq!(by_name_json["data"].as_array().unwrap().len(), 1);
+        assert_eq!(by_name_json["data"][0]["id"], "beta-1");
+
+        let by_header = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .header("x-wildtoken-upstream", "alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let by_header_body = to_bytes(by_header.into_body(), 1024 * 1024).await.unwrap();
+        let by_header_json: serde_json::Value = serde_json::from_slice(&by_header_body).unwrap();
+        assert_eq!(by_header_json["data"][0]["id"], "alpha-1");
+
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models?upstream=missing")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        let disabled = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models?upstream=off")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_models_filtered_request_does_not_use_or_fill_global_cache() {
+        let db = proxy_test_database().await;
+        sqlx::query(
+            r#"INSERT INTO upstreams
+               (name, base_url, model_names, model_prefixes, model_mappings, priority, weight, enabled)
+               VALUES
+               ('alpha', 'http://example.com', '["alpha-1"]', '[]', '{}', 100, 100, 1),
+               ('beta', 'http://example.com', '["beta-1"]', '[]', '{}', 100, 100, 1)"#,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let state = test_proxy_state(db, RuntimeSettings::default()).await;
+        let app = Router::new()
+            .route("/v1/models", axum::routing::get(list_models_handler))
+            .with_state(state.clone());
+
+        let filtered = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models?upstream=alpha")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(filtered.status(), StatusCode::OK);
+        assert!(state.models_list_cache.get().await.is_none());
+
+        let full = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .header(header::AUTHORIZATION, "Bearer downstream-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let full_body = to_bytes(full.into_body(), 1024 * 1024).await.unwrap();
+        let full_json: serde_json::Value = serde_json::from_slice(&full_body).unwrap();
+        assert_eq!(full_json["data"].as_array().unwrap().len(), 2);
+        assert!(state.models_list_cache.get().await.is_some());
     }
 }

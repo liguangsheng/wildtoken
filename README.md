@@ -121,10 +121,24 @@ curl http://127.0.0.1:3100/v1/messages \
   }'
 ```
 
-强制指定渠道：
+## 模型列表
+
+`GET /v1/models` 由 WildToken 本地聚合，不转发上游。返回所有**启用**渠道配置里的：
+
+- `model_names` 精确模型名
+- `model_mappings` 的 **key**（下游请求名）
+
+`model_prefixes` 只是路由匹配规则，**不会**展开成具体模型 id，因此仅配置了前缀的渠道不会出现在列表中。需要出现在列表里时，请把具体模型写进 `model_names` 或 `model_mappings`。
+
+可按渠道过滤（名称或 id）：
 
 ```bash
+curl 'http://127.0.0.1:3100/v1/models?upstream=openai' \
+  -H 'Authorization: Bearer <DOWNSTREAM_TOKEN>'
+
 curl http://127.0.0.1:3100/v1/models \
   -H 'Authorization: Bearer <DOWNSTREAM_TOKEN>' \
   -H 'X-WildToken-Upstream: openai'
 ```
+
+未指定渠道时结果会缓存；创建/更新/启停/调整优先级/删除渠道后缓存失效。指定渠道的请求不走该全局缓存。
