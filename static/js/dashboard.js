@@ -395,14 +395,14 @@ async function loadDashboardData() {
       limit: String(DASHBOARD_LOG_LIMIT),
       offset: "0",
     });
-    const [page, tokenUsage, system] = await Promise.all([
+    const [page, tokenUsage, runtimeMetrics] = await Promise.all([
       api(`/api/admin/logs?${params}`),
       api("/api/admin/logs/token-usage"),
-      api("/api/admin/system"),
+      api("/api/admin/system/metrics"),
     ]);
     dashboardLogItems = page.items || [];
     dashboardTokenUsage = tokenUsage;
-    dashboardRuntimeMetrics = system?.runtime_metrics || null;
+    dashboardRuntimeMetrics = runtimeMetrics || null;
     lastDashboardLoadError = "";
     renderDashboard();
   } catch (error) {

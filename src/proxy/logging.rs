@@ -5,6 +5,9 @@ use base64::Engine as _;
 use crate::state::RuntimeMetrics;
 
 const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+const LOG_WRITE_MAX_ATTEMPTS: usize = 5;
+const LOG_WRITE_RETRY_BASE_DELAY_MS: u64 = 50;
+const CLEANUP_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(120);
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -460,7 +463,7 @@ pub fn schedule_log(pool: &sqlx::SqlitePool, metrics: Arc<RuntimeMetrics>, entry
     let pool = pool.clone();
     tokio::spawn(async move {
         let started_at = std::time::Instant::now();
-        if let Err(error) = insert_log_entry(&pool, entry).await {
+        if let Err(error) = insert_log_entry_with_retry(&pool, entry).await {
             metrics.record_log_write_failure();
             tracing::error!(?error, "failed to persist request log");
         }
@@ -468,6 +471,33 @@ pub fn schedule_log(pool: &sqlx::SqlitePool, metrics: Arc<RuntimeMetrics>, entry
             metrics.record_slow_db_operation();
         }
     });
+}
+
+async fn insert_log_entry_with_retry(
+    pool: &sqlx::SqlitePool,
+    entry: LogEntry,
+) -> Result<(), crate::error::AppError> {
+    let mut attempt = 0;
+    loop {
+        match insert_log_entry(pool, entry.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error) if is_database_locked(&error) && attempt + 1 < LOG_WRITE_MAX_ATTEMPTS => {
+                let delay_ms = LOG_WRITE_RETRY_BASE_DELAY_MS * (1_u64 << attempt.min(4));
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_database_locked(error: &crate::error::AppError) -> bool {
+    matches!(
+        error,
+        crate::error::AppError::Database(sqlx::Error::Database(database_error))
+            if database_error.code().as_deref() == Some("5")
+                || database_error.message().contains("database is locked")
+    )
 }
 
 async fn insert_log_entry(
@@ -553,10 +583,9 @@ pub async fn cleanup_loop(
     metrics: Arc<RuntimeMetrics>,
 ) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+    tokio::time::sleep(CLEANUP_STARTUP_DELAY).await;
 
     loop {
-        // A Tokio interval's first tick is immediate, so stale payloads are
-        // cleaned on startup instead of waiting an hour after every deploy.
         interval.tick().await;
 
         let settings = runtime_settings.read().await.clone();

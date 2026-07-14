@@ -306,6 +306,7 @@ pub async fn token_usage_stats(pool: &SqlitePool) -> Result<TokenUsageStatsOut, 
                 WHEN created_at >= datetime('now', '-30 days')
                 THEN 1 ELSE 0 END), 0) AS thirty_days_all_requests
         FROM request_logs
+        WHERE created_at >= datetime('now', '-30 days')
         "#,
     )
     .fetch_one(pool)

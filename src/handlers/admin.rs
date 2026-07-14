@@ -240,7 +240,6 @@ pub async fn admin_system_info(
     .await
     .unwrap_or((0, 0));
     let settings = state.runtime_settings.read().await.clone();
-    let metrics = state.runtime_metrics.snapshot();
 
     Json(SystemInfoOut {
         service: "WildToken",
@@ -261,29 +260,41 @@ pub async fn admin_system_info(
             log_body_max_bytes: settings.log_body_max_bytes,
             revision: settings.revision,
         },
-        runtime_metrics: RuntimeMetricsOut {
-            active_sse_streams: metrics.active_sse_streams,
-            sse_completed_total: metrics.sse_completed_total,
-            sse_client_disconnects_total: metrics.sse_client_disconnects_total,
-            sse_recent_disconnects_10m: metrics.sse_recent_disconnects_10m,
-            sse_upstream_errors_total: metrics.sse_upstream_errors_total,
-            log_write_failures_total: metrics.log_write_failures_total,
-            slow_db_operations_total: metrics.slow_db_operations_total,
-            cleanup: RuntimeCleanupMetricsOut {
-                active: metrics.cleanup_active,
-                runs_total: metrics.cleanup_runs_total,
-                errors_total: metrics.cleanup_errors_total,
-                rows_cleared_total: metrics.cleanup_rows_cleared_total,
-                batches_total: metrics.cleanup_batches_total,
-                current_rows_cleared: metrics.cleanup_current_rows_cleared,
-                current_batches: metrics.cleanup_current_batches,
-                last_started_unix_seconds: metrics.cleanup_last_started_unix_seconds,
-                last_finished_unix_seconds: metrics.cleanup_last_finished_unix_seconds,
-                last_duration_ms: metrics.cleanup_last_duration_ms,
-                last_rows_cleared: metrics.cleanup_last_rows_cleared,
-            },
-        },
+        runtime_metrics: runtime_metrics_out(&state),
     })
+}
+
+pub async fn admin_runtime_metrics(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+) -> Json<RuntimeMetricsOut> {
+    Json(runtime_metrics_out(&state))
+}
+
+fn runtime_metrics_out(state: &AppState) -> RuntimeMetricsOut {
+    let metrics = state.runtime_metrics.snapshot();
+    RuntimeMetricsOut {
+        active_sse_streams: metrics.active_sse_streams,
+        sse_completed_total: metrics.sse_completed_total,
+        sse_client_disconnects_total: metrics.sse_client_disconnects_total,
+        sse_recent_disconnects_10m: metrics.sse_recent_disconnects_10m,
+        sse_upstream_errors_total: metrics.sse_upstream_errors_total,
+        log_write_failures_total: metrics.log_write_failures_total,
+        slow_db_operations_total: metrics.slow_db_operations_total,
+        cleanup: RuntimeCleanupMetricsOut {
+            active: metrics.cleanup_active,
+            runs_total: metrics.cleanup_runs_total,
+            errors_total: metrics.cleanup_errors_total,
+            rows_cleared_total: metrics.cleanup_rows_cleared_total,
+            batches_total: metrics.cleanup_batches_total,
+            current_rows_cleared: metrics.cleanup_current_rows_cleared,
+            current_batches: metrics.cleanup_current_batches,
+            last_started_unix_seconds: metrics.cleanup_last_started_unix_seconds,
+            last_finished_unix_seconds: metrics.cleanup_last_finished_unix_seconds,
+            last_duration_ms: metrics.cleanup_last_duration_ms,
+            last_rows_cleared: metrics.cleanup_last_rows_cleared,
+        },
+    }
 }
 
 // ── Tokens ───────────────────────────────────────────────────────────────────

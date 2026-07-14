@@ -109,6 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .delete(handlers::admin::admin_delete_model_test_prompt_template),
         )
         .route("/api/admin/system", get(handlers::admin::admin_system_info))
+        .route(
+            "/api/admin/system/metrics",
+            get(handlers::admin::admin_runtime_metrics),
+        )
         // Upstreams
         .route(
             "/api/admin/upstreams/fetch-models",
