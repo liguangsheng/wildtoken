@@ -666,7 +666,8 @@ async function loadLogs() {
     const upstreamId = logUpstreamFilter.value;
     const search = (logSearchInput?.value || "").trim();
     const status = logStatusFilter?.value || "";
-    const filtersActive = Boolean(upstreamId || search || status);
+    const clientType = logClientFilter?.value || "";
+    const filtersActive = Boolean(upstreamId || search || status || clientType);
     const params = new URLSearchParams({
       limit: String(LOG_PAGE_SIZE),
     });
@@ -674,6 +675,7 @@ async function loadLogs() {
     if (upstreamId) params.set("upstream_id", upstreamId);
     if (search) params.set("search", search);
     if (status) params.set("status", status);
+    if (clientType) params.set("client_type", clientType);
 
     const page = await api(`/api/admin/logs?${params}`);
     const items = page.items || [];

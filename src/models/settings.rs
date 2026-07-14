@@ -177,12 +177,24 @@ pub struct SystemInfoOut {
 pub const DEFAULT_LOG_BODY_KEEP_COUNT: i64 = 100;
 pub const DEFAULT_LOG_RETENTION_DAYS: i64 = 30;
 pub const DEFAULT_LOG_BODY_MAX_BYTES: i64 = 200_000;
+pub const DEFAULT_MAX_RETRIES: i64 = 1;
+pub const DEFAULT_SAME_UPSTREAM_RETRY_INTERVAL_MS: i64 = 1_000;
+pub const DEFAULT_AUTO_WEIGHT_FAILURE_PENALTY: i64 = 20;
+pub const DEFAULT_AUTO_WEIGHT_SUCCESS_INCREMENT: i64 = 5;
+pub const DEFAULT_AUTO_WEIGHT_RECOVERY_INCREMENT: i64 = 10;
+pub const DEFAULT_AUTO_WEIGHT_RECOVERY_INTERVAL_SECONDS: i64 = 60;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RuntimeSettings {
     pub log_body_keep_count: i64,
     pub log_retention_days: i64,
     pub log_body_max_bytes: i64,
+    pub max_retries: i64,
+    pub same_upstream_retry_interval_ms: i64,
+    pub auto_weight_failure_penalty: i64,
+    pub auto_weight_success_increment: i64,
+    pub auto_weight_recovery_increment: i64,
+    pub auto_weight_recovery_interval_seconds: i64,
     pub revision: i64,
     pub updated_at: String,
     #[sqlx(skip)]
@@ -196,6 +208,12 @@ impl Default for RuntimeSettings {
             log_body_keep_count: DEFAULT_LOG_BODY_KEEP_COUNT,
             log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
             log_body_max_bytes: DEFAULT_LOG_BODY_MAX_BYTES,
+            max_retries: DEFAULT_MAX_RETRIES,
+            same_upstream_retry_interval_ms: DEFAULT_SAME_UPSTREAM_RETRY_INTERVAL_MS,
+            auto_weight_failure_penalty: DEFAULT_AUTO_WEIGHT_FAILURE_PENALTY,
+            auto_weight_success_increment: DEFAULT_AUTO_WEIGHT_SUCCESS_INCREMENT,
+            auto_weight_recovery_increment: DEFAULT_AUTO_WEIGHT_RECOVERY_INCREMENT,
+            auto_weight_recovery_interval_seconds: DEFAULT_AUTO_WEIGHT_RECOVERY_INTERVAL_SECONDS,
             revision: 0,
             updated_at: String::new(),
             database_override: false,
@@ -214,6 +232,24 @@ impl RuntimeSettings {
         if !(0..=1_048_576).contains(&self.log_body_max_bytes) {
             return Err("log_body_max_bytes must be between 0 and 1048576");
         }
+        if !(0..=5).contains(&self.max_retries) {
+            return Err("max_retries must be between 0 and 5");
+        }
+        if !(0..=60_000).contains(&self.same_upstream_retry_interval_ms) {
+            return Err("same_upstream_retry_interval_ms must be between 0 and 60000");
+        }
+        if !(0..=100).contains(&self.auto_weight_failure_penalty) {
+            return Err("auto_weight_failure_penalty must be between 0 and 100");
+        }
+        if !(0..=100).contains(&self.auto_weight_success_increment) {
+            return Err("auto_weight_success_increment must be between 0 and 100");
+        }
+        if !(0..=100).contains(&self.auto_weight_recovery_increment) {
+            return Err("auto_weight_recovery_increment must be between 0 and 100");
+        }
+        if !(1..=3_600).contains(&self.auto_weight_recovery_interval_seconds) {
+            return Err("auto_weight_recovery_interval_seconds must be between 1 and 3600");
+        }
         Ok(())
     }
 }
@@ -224,6 +260,12 @@ pub struct RuntimeSettingsIn {
     pub log_body_keep_count: i64,
     pub log_retention_days: i64,
     pub log_body_max_bytes: i64,
+    pub max_retries: i64,
+    pub same_upstream_retry_interval_ms: i64,
+    pub auto_weight_failure_penalty: i64,
+    pub auto_weight_success_increment: i64,
+    pub auto_weight_recovery_increment: i64,
+    pub auto_weight_recovery_interval_seconds: i64,
     pub revision: i64,
 }
 
@@ -236,6 +278,12 @@ impl RuntimeSettingsIn {
             log_body_keep_count: self.log_body_keep_count,
             log_retention_days: self.log_retention_days,
             log_body_max_bytes: self.log_body_max_bytes,
+            max_retries: self.max_retries,
+            same_upstream_retry_interval_ms: self.same_upstream_retry_interval_ms,
+            auto_weight_failure_penalty: self.auto_weight_failure_penalty,
+            auto_weight_success_increment: self.auto_weight_success_increment,
+            auto_weight_recovery_increment: self.auto_weight_recovery_increment,
+            auto_weight_recovery_interval_seconds: self.auto_weight_recovery_interval_seconds,
             ..Default::default()
         }
         .validate()
@@ -247,6 +295,12 @@ pub struct RuntimeSettingsOut {
     pub log_body_keep_count: i64,
     pub log_retention_days: i64,
     pub log_body_max_bytes: i64,
+    pub max_retries: i64,
+    pub same_upstream_retry_interval_ms: i64,
+    pub auto_weight_failure_penalty: i64,
+    pub auto_weight_success_increment: i64,
+    pub auto_weight_recovery_increment: i64,
+    pub auto_weight_recovery_interval_seconds: i64,
     pub revision: i64,
     pub updated_at: String,
     pub database_override: bool,
@@ -258,6 +312,12 @@ impl From<&RuntimeSettings> for RuntimeSettingsOut {
             log_body_keep_count: value.log_body_keep_count,
             log_retention_days: value.log_retention_days,
             log_body_max_bytes: value.log_body_max_bytes,
+            max_retries: value.max_retries,
+            same_upstream_retry_interval_ms: value.same_upstream_retry_interval_ms,
+            auto_weight_failure_penalty: value.auto_weight_failure_penalty,
+            auto_weight_success_increment: value.auto_weight_success_increment,
+            auto_weight_recovery_increment: value.auto_weight_recovery_increment,
+            auto_weight_recovery_interval_seconds: value.auto_weight_recovery_interval_seconds,
             revision: value.revision,
             updated_at: value.updated_at.clone(),
             database_override: value.database_override,
@@ -296,11 +356,41 @@ mod tests {
         }
         .validate()
         .is_ok());
+        assert!(RuntimeSettings {
+            max_retries: 6,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(RuntimeSettings {
+            same_upstream_retry_interval_ms: 60_001,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(RuntimeSettings {
+            auto_weight_failure_penalty: 101,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(RuntimeSettings {
+            auto_weight_recovery_interval_seconds: 0,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
 
         assert!(RuntimeSettingsIn {
             log_body_keep_count: 100,
             log_retention_days: 30,
             log_body_max_bytes: 200_000,
+            max_retries: 1,
+            same_upstream_retry_interval_ms: 1_000,
+            auto_weight_failure_penalty: 20,
+            auto_weight_success_increment: 5,
+            auto_weight_recovery_increment: 10,
+            auto_weight_recovery_interval_seconds: 60,
             revision: 0,
         }
         .validate()

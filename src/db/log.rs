@@ -1,7 +1,9 @@
 use sqlx::{FromRow, QueryBuilder, Sqlite, SqlitePool};
 
 use crate::error::AppError;
-use crate::models::request_log::{RequestLogDetailOut, RequestLogOut};
+use crate::models::request_log::{
+    RequestLogDetailOut, RequestLogOut, RequestLogTopItemOut, RequestLogTopStatsOut,
+};
 #[cfg(test)]
 use crate::models::request_log::{TokenUsageStatsOut, TokenUsageWindowOut};
 use crate::state::RuntimeMetrics;
@@ -77,6 +79,54 @@ struct LogBodyCleanupRow {
     downstream_response_is_override: i32,
 }
 
+#[derive(Debug, FromRow)]
+struct TopCountRow {
+    name: String,
+    count: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogTopWindow {
+    Today,
+    OneDay,
+    ThreeDays,
+    SevenDays,
+    ThirtyDays,
+}
+
+impl LogTopWindow {
+    pub fn from_query_value(value: &str) -> Option<Self> {
+        match value {
+            "today" => Some(Self::Today),
+            "1d" => Some(Self::OneDay),
+            "3d" => Some(Self::ThreeDays),
+            "7d" => Some(Self::SevenDays),
+            "30d" => Some(Self::ThirtyDays),
+            _ => None,
+        }
+    }
+
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::OneDay => "1d",
+            Self::ThreeDays => "3d",
+            Self::SevenDays => "7d",
+            Self::ThirtyDays => "30d",
+        }
+    }
+
+    fn cutoff_expression(self) -> &'static str {
+        match self {
+            Self::Today => "datetime('now', 'localtime', 'start of day', 'utc')",
+            Self::OneDay => "datetime('now', '-1 day')",
+            Self::ThreeDays => "datetime('now', '-3 days')",
+            Self::SevenDays => "datetime('now', '-7 days')",
+            Self::ThirtyDays => "datetime('now', '-30 days')",
+        }
+    }
+}
+
 // ── Public functions ────────────────────────────────────────────────────────
 
 fn push_log_filters(
@@ -84,6 +134,7 @@ fn push_log_filters(
     upstream_id: Option<i64>,
     search: Option<&str>,
     status: Option<&str>,
+    client_type: Option<&str>,
 ) {
     if let Some(upstream_id) = upstream_id {
         query.push(" AND upstream_id = ").push_bind(upstream_id);
@@ -117,6 +168,11 @@ fn push_log_filters(
     } {
         query.push(status_filter);
     }
+    if let Some(client_type) = client_type {
+        query
+            .push(" AND client_type = ")
+            .push_bind(client_type.to_string());
+    }
 }
 
 pub async fn list_logs(
@@ -128,6 +184,7 @@ pub async fn list_logs(
     upstream_id: Option<i64>,
     search: Option<&str>,
     status: Option<&str>,
+    client_type: Option<&str>,
 ) -> Result<Vec<RequestLogOut>, AppError> {
     let mut query = QueryBuilder::<Sqlite>::new(
         "SELECT id, created_at, method, path,
@@ -141,7 +198,7 @@ pub async fn list_logs(
          FROM request_logs WHERE 1 = 1",
     );
 
-    push_log_filters(&mut query, upstream_id, search, status);
+    push_log_filters(&mut query, upstream_id, search, status, client_type);
     if let (Some(before_created_at), Some(before_id)) = (before_created_at, before_id) {
         query.push(" AND (created_at < ");
         query.push_bind(before_created_at);
@@ -265,6 +322,106 @@ pub async fn get_log_detail(
             downstream_response: downstream_response.and_then(|s| serde_json::from_str(s).ok()),
         }
     }))
+}
+
+pub async fn top_log_stats(
+    pool: &SqlitePool,
+    window: LogTopWindow,
+    limit: i64,
+) -> Result<RequestLogTopStatsOut, AppError> {
+    let limit = limit.clamp(1, 20);
+    let models = top_log_counts(
+        pool,
+        window,
+        "TRIM(model)",
+        "model IS NOT NULL AND TRIM(model) <> ''",
+        "1",
+        None,
+        limit,
+    )
+    .await?;
+    let channels = top_log_counts(
+        pool,
+        window,
+        r#"CASE
+              WHEN upstream_name IS NOT NULL AND TRIM(upstream_name) <> '' THEN TRIM(upstream_name)
+              WHEN upstream_id IS NOT NULL THEN '#' || upstream_id
+              ELSE NULL
+           END"#,
+        "upstream_id IS NOT NULL OR (upstream_name IS NOT NULL AND TRIM(upstream_name) <> '')",
+        "1",
+        None,
+        limit,
+    )
+    .await?;
+    let model_tokens = top_log_counts(
+        pool,
+        window,
+        "TRIM(model)",
+        "model IS NOT NULL AND TRIM(model) <> ''",
+        "COALESCE(total_tokens, 0)",
+        Some("total_tokens IS NOT NULL AND total_tokens > 0"),
+        limit,
+    )
+    .await?;
+    let channel_tokens = top_log_counts(
+        pool,
+        window,
+        r#"CASE
+              WHEN upstream_name IS NOT NULL AND TRIM(upstream_name) <> '' THEN TRIM(upstream_name)
+              WHEN upstream_id IS NOT NULL THEN '#' || upstream_id
+              ELSE NULL
+           END"#,
+        "upstream_id IS NOT NULL OR (upstream_name IS NOT NULL AND TRIM(upstream_name) <> '')",
+        "COALESCE(total_tokens, 0)",
+        Some("total_tokens IS NOT NULL AND total_tokens > 0"),
+        limit,
+    )
+    .await?;
+
+    Ok(RequestLogTopStatsOut {
+        window: window.as_query_value().to_string(),
+        models,
+        channels,
+        model_tokens,
+        channel_tokens,
+    })
+}
+
+async fn top_log_counts(
+    pool: &SqlitePool,
+    window: LogTopWindow,
+    name_expression: &str,
+    source_filter: &str,
+    metric_expression: &str,
+    metric_filter: Option<&str>,
+    limit: i64,
+) -> Result<Vec<RequestLogTopItemOut>, AppError> {
+    let mut query = QueryBuilder::<Sqlite>::new("SELECT name, SUM(value) AS count FROM (SELECT ");
+    query
+        .push(name_expression)
+        .push(" AS name, ")
+        .push(metric_expression)
+        .push(" AS value FROM request_logs WHERE created_at >= ")
+        .push(window.cutoff_expression())
+        .push(" AND (")
+        .push(source_filter)
+        .push(")");
+    if let Some(metric_filter) = metric_filter {
+        query.push(" AND (").push(metric_filter).push(")");
+    }
+    query
+        .push(") WHERE name IS NOT NULL AND name <> '' GROUP BY name HAVING count > 0 ORDER BY count DESC, name COLLATE NOCASE ASC LIMIT ")
+        .push_bind(limit);
+
+    let rows: Vec<TopCountRow> = query.build_query_as().fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| RequestLogTopItemOut {
+            name: row.name,
+            count: row.count,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -532,7 +689,7 @@ mod tests {
 
     use super::{
         clear_old_log_bodies, delete_old_logs, get_log_detail, list_logs, reclaim_free_pages,
-        token_usage_stats, LOG_BODY_CLEANUP_BATCH_SIZE,
+        token_usage_stats, top_log_stats, LogTopWindow, LOG_BODY_CLEANUP_BATCH_SIZE,
     };
 
     async fn test_pool() -> SqlitePool {
@@ -613,11 +770,43 @@ mod tests {
         .await
         .unwrap();
 
-        let items = list_logs(&pool, 10, 0, None, None, Some(1), None, Some("2xx"))
+        let items = list_logs(&pool, 10, 0, None, None, Some(1), None, Some("2xx"), None)
             .await
             .unwrap();
 
         assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), [1, 3]);
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_client_type() {
+        let pool = test_pool().await;
+        sqlx::query(
+            r#"INSERT INTO request_logs (id, created_at, client_type) VALUES
+               (1, datetime('now'), 'codex-tui'),
+               (2, datetime('now', '-30 seconds'), 'codex-desktop'),
+               (3, datetime('now', '-60 seconds'), 'codex-tui'),
+               (4, datetime('now', '-90 seconds'), 'unknown')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let items = list_logs(
+            &pool,
+            10,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("codex-tui"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), [1, 3]);
+        assert!(items.iter().all(|item| item.client_type == "codex-tui"));
     }
 
     #[tokio::test]
@@ -634,7 +823,7 @@ mod tests {
         .await
         .unwrap();
 
-        let first_page = list_logs(&pool, 2, 0, None, None, None, None, None)
+        let first_page = list_logs(&pool, 2, 0, None, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -649,6 +838,7 @@ mod tests {
             0,
             Some(&cursor.created_at),
             Some(cursor.id),
+            None,
             None,
             None,
             None,
@@ -709,6 +899,74 @@ mod tests {
                 stats.thirty_days.all_request_count,
             ),
             (300, 2, 4)
+        );
+    }
+
+    #[tokio::test]
+    async fn top_log_stats_respect_window_and_limit() {
+        let pool = test_pool().await;
+        sqlx::query(
+            r#"INSERT INTO request_logs
+               (id, created_at, model, upstream_id, upstream_name, total_tokens)
+               VALUES
+               (1, datetime('now'), 'gpt-5', 1, 'fast', 100),
+               (2, datetime('now', '-2 days'), 'gpt-5', 2, 'slow', 400),
+               (3, datetime('now', '-2 days'), 'claude', 1, 'fast', 300),
+               (4, datetime('now', '-4 days'), 'old', 3, 'old', 900),
+               (5, datetime('now'), NULL, NULL, NULL, 500),
+               (6, datetime('now'), 'zero-token', 4, 'zero', NULL)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let stats = top_log_stats(&pool, LogTopWindow::ThreeDays, 5)
+            .await
+            .unwrap();
+        assert_eq!(stats.window, "3d");
+        assert_eq!(
+            stats
+                .models
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [("gpt-5", 2), ("claude", 1), ("zero-token", 1)]
+        );
+        assert_eq!(
+            stats
+                .channels
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [("fast", 2), ("slow", 1), ("zero", 1)]
+        );
+        assert_eq!(
+            stats
+                .model_tokens
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [("gpt-5", 500), ("claude", 300)]
+        );
+        assert_eq!(
+            stats
+                .channel_tokens
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [("fast", 400), ("slow", 400)]
+        );
+
+        let limited = top_log_stats(&pool, LogTopWindow::ThirtyDays, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            limited
+                .models
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [("gpt-5", 2)]
         );
     }
 

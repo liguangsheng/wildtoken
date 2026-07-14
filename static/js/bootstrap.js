@@ -101,6 +101,7 @@ const logRows = document.querySelector("#log-rows");
 const logUpstreamFilter = document.querySelector("#log-upstream-filter");
 const logSearchInput = document.querySelector("#log-search");
 const logStatusFilter = document.querySelector("#log-status-filter");
+const logClientFilter = document.querySelector("#log-client-filter");
 const logRefreshButton = document.querySelector("#log-refresh");
 const logPrevButton = document.querySelector("#log-prev");
 const logNextButton = document.querySelector("#log-next");
@@ -118,6 +119,9 @@ const DEFAULT_HOME_KEY = "wildtoken_default_home";
 const DEFAULT_REFRESH_MS = 10000;
 const DASHBOARD_REFRESH_MS = 15000;
 const DASHBOARD_LOG_LIMIT = 200;
+const DASHBOARD_TOP_LIMIT = 10;
+const DASHBOARD_TOP_WINDOW_KEY = "wildtoken_dashboard_top_window";
+const DASHBOARD_TOP_WINDOW_VALUES = new Set(["today", "1d", "3d", "7d", "30d"]);
 const DENSITY_KEY = "wildtoken_density";
 const LOG_COLUMNS_KEY = "wildtoken_log_columns";
 const UPSTREAM_COLUMNS_KEY = "wildtoken_upstream_columns";
@@ -133,6 +137,15 @@ let logsLoading = false;
 let dashboardLogItems = [];
 let dashboardTokenUsage = null;
 let dashboardRuntimeMetrics = null;
+let dashboardTopStats = null;
+let dashboardTopWindow = (() => {
+  try {
+    const saved = localStorage.getItem(DASHBOARD_TOP_WINDOW_KEY);
+    return DASHBOARD_TOP_WINDOW_VALUES.has(saved) ? saved : "today";
+  } catch {
+    return "today";
+  }
+})();
 let dashboardRefreshTimer = null;
 let dashboardLoading = false;
 let lastDashboardLoadError = "";
@@ -149,9 +162,18 @@ const dashboardLatencyChart = document.querySelector("#dashboard-latency-chart")
 const dashboardLatencyMeta = document.querySelector("#dashboard-latency-meta");
 const dashboardTopModels = document.querySelector("#dashboard-top-models");
 const dashboardModelsMeta = document.querySelector("#dashboard-models-meta");
+const dashboardTopModelTokens = document.querySelector("#dashboard-top-model-tokens");
+const dashboardModelTokensMeta = document.querySelector("#dashboard-model-tokens-meta");
 const dashboardTopChannels = document.querySelector("#dashboard-top-channels");
 const dashboardChannelsMeta = document.querySelector("#dashboard-channels-meta");
+const dashboardTopChannelTokens = document.querySelector("#dashboard-top-channel-tokens");
+const dashboardChannelTokensMeta = document.querySelector("#dashboard-channel-tokens-meta");
+const dashboardTopWindowSelect = document.querySelector("#dashboard-top-window");
 const dashboardErrorRows = document.querySelector("#dashboard-error-rows");
+
+if (dashboardTopWindowSelect) {
+  dashboardTopWindowSelect.value = dashboardTopWindow;
+}
 
 let upstreamRefreshTimer = null;
 let upstreamsLoadedOnce = false;
@@ -160,9 +182,9 @@ let upstreamSearchQuery = "";
 let upstreamStatusFilterValue = "";
 let upstreamSearchTimer = null;
 
-const BACKOFF_TICK_MS = 1000;
+const HEALTH_TICK_MS = 1000;
 const MAX_MODEL_CHIPS = 5;
-let backoffTickTimer = null;
+let healthTickTimer = null;
 let pageVisible = typeof document.visibilityState === "string"
   ? document.visibilityState !== "hidden"
   : true;
@@ -195,6 +217,14 @@ const serverSettingsForm = document.querySelector("#server-settings-form");
 const settingsBodyKeepCount = document.querySelector("#settings-body-keep-count");
 const settingsRetentionDays = document.querySelector("#settings-retention-days");
 const settingsBodyMaxBytes = document.querySelector("#settings-body-max-bytes");
+const routingSettingsForm = document.querySelector("#routing-settings-form");
+const settingsMaxRetries = document.querySelector("#settings-max-retries");
+const settingsSameUpstreamRetryMs = document.querySelector("#settings-same-upstream-retry-ms");
+const settingsFailurePenalty = document.querySelector("#settings-failure-penalty");
+const settingsSuccessIncrement = document.querySelector("#settings-success-increment");
+const settingsRecoveryIncrement = document.querySelector("#settings-recovery-increment");
+const settingsRecoveryInterval = document.querySelector("#settings-recovery-interval");
+const routingSettingsStatus = document.querySelector("#routing-settings-status");
 const settingsRevision = document.querySelector("#settings-revision");
 const serverSettingsStatus = document.querySelector("#server-settings-status");
 const rotateAdminTokenButton = document.querySelector("#rotate-admin-token");
@@ -244,10 +274,17 @@ const modelDialogSummary = document.querySelector("#model-dialog-summary");
 const modelDialogClose = document.querySelector("#model-dialog-close");
 const modelFilter = document.querySelector("#model-filter");
 const modelOptions = document.querySelector("#model-options");
+const modelSelectedOnly = document.querySelector("#model-selected-only");
 const modelSelectAllButton = document.querySelector("#model-select-all");
 const modelClearAllButton = document.querySelector("#model-clear-all");
+const modelManualEntry = document.querySelector("#model-manual-entry");
+const modelManualInput = document.querySelector("#model-manual-input");
+const modelAddManualButton = document.querySelector("#model-add-manual");
 const modelSaveSelectionButton = document.querySelector("#model-save-selection");
 const modelCancelSelectionButton = document.querySelector("#model-cancel-selection");
+const manageModelsButton = document.querySelector("#manage-models");
+const modelSelectionPreview = document.querySelector("#model-selection-preview");
+const modelSelectionCount = document.querySelector("#model-selection-count");
 
 const fields = {
   id: document.querySelector("#upstream-id"),
@@ -258,9 +295,11 @@ const fields = {
   modelPrefixes: document.querySelector("#model-prefixes"),
   modelMappings: document.querySelector("#model-mappings"),
   priority: document.querySelector("#priority"),
+  weight: document.querySelector("#weight"),
   timeoutSeconds: document.querySelector("#timeout-seconds"),
   extraHeaders: document.querySelector("#extra-headers"),
   enabled: document.querySelector("#enabled"),
+  autoWeightEnabled: document.querySelector("#auto-weight-enabled"),
   clearApiKey: document.querySelector("#clear-api-key"),
 };
 let persistedFormApiKey = null;
@@ -298,6 +337,8 @@ const modelDialogState = {
   mode: "form",
   models: [],
   selected: new Set(),
+  available: new Set(),
+  catalogLoaded: false,
 };
 
 
@@ -654,23 +695,23 @@ function renderUpstreamSummaryCore() {
   const total = upstreams.length;
   const enabled = upstreams.filter((upstream) => upstream.enabled).length;
   const disabled = total - enabled;
-  const backedOff = upstreams.filter((upstream) => liveBackoffSeconds(upstream) > 0).length;
+  const zeroEffectiveWeight = upstreams.filter((upstream) => upstream.enabled && Number(upstream.effective_weight) <= 0).length;
 
-  const signature = [total, enabled, disabled, backedOff].join("|");
+  const signature = [total, enabled, disabled, zeroEffectiveWeight].join("|");
   if (signature === lastSummarySignature) {
     return;
   }
   lastSummarySignature = signature;
 
-  const backoffHint = backedOff > 0
-    ? `<span class="summary-hint">退避结束后自动恢复路由</span>`
+  const healthHint = zeroEffectiveWeight > 0
+    ? `<span class="summary-hint">自动降为 0 的渠道会按恢复周期重新加入</span>`
     : "";
 
   upstreamSummary.innerHTML = `
     <span><strong>${total}</strong>渠道总数</span>
     <span><strong>${enabled}</strong>启用</span>
     <span><strong>${disabled}</strong>停用</span>
-    <span class="${backedOff ? "summary-warn" : ""}"><strong>${backedOff}</strong>退避中${backoffHint}</span>
+    <span class="${zeroEffectiveWeight ? "summary-warn" : ""}"><strong>${zeroEffectiveWeight}</strong>有效权重为 0${healthHint}</span>
   `;
 }
 
@@ -691,6 +732,7 @@ const DEFAULT_UPSTREAM_COLUMNS = {
   base_url: true,
   models: true,
   priority: true,
+  weight: true,
   status: true,
   actions: true,
 };
@@ -717,6 +759,7 @@ const UPSTREAM_COL_LABELS = {
   base_url: "Base URL",
   models: "模型匹配",
   priority: "优先级",
+  weight: "权重",
   status: "状态",
   actions: "操作",
 };
@@ -850,7 +893,7 @@ function toggleColMenu(menu, button) {
   }
 }
 
-function formatBackoffNote(seconds) {
-  if (!seconds) return "";
-  return `退避中 · 剩 ${seconds}s · 自动恢复后参与路由`;
+function formatHealthZeroNote(seconds) {
+  if (!seconds) return "健康分 0 · 等待恢复周期";
+  return `健康分 0 · ${seconds}s 后恢复`;
 }

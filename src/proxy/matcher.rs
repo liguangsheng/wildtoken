@@ -2,72 +2,202 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::models::settings::RuntimeSettings;
 use crate::models::upstream::UpstreamRow;
 
-// ── Backoff ──────────────────────────────────────────────────────────────────
+pub const MAX_HEALTH_SCORE: i64 = 100;
 
-pub const BACKOFF_INITIAL_SECONDS: u64 = 60;
-pub const BACKOFF_STEP_SECONDS: u64 = 60;
-pub const BACKOFF_MAX_SECONDS: u64 = 300;
-
-struct BackoffState {
-    until: Instant,
-    step: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct AutoWeightPolicy {
+    failure_penalty: i64,
+    success_increment: i64,
+    recovery_increment: i64,
+    recovery_interval: Duration,
 }
 
-pub struct BackoffManager {
-    backoffs: Mutex<HashMap<i64, BackoffState>>,
+impl From<&RuntimeSettings> for AutoWeightPolicy {
+    fn from(settings: &RuntimeSettings) -> Self {
+        Self {
+            failure_penalty: settings.auto_weight_failure_penalty,
+            success_increment: settings.auto_weight_success_increment,
+            recovery_increment: settings.auto_weight_recovery_increment,
+            recovery_interval: Duration::from_secs(
+                settings.auto_weight_recovery_interval_seconds.max(1) as u64,
+            ),
+        }
+    }
 }
 
-impl BackoffManager {
+struct HealthState {
+    score: i64,
+    last_adjusted_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HealthSnapshot {
+    pub score: i64,
+    pub routing_weight: u64,
+    pub effective_weight: f64,
+    pub recovery_remaining_seconds: Option<i64>,
+}
+
+pub struct AutoWeightManager {
+    states: Mutex<HashMap<i64, HealthState>>,
+}
+
+impl AutoWeightManager {
     pub fn new() -> Self {
         Self {
-            backoffs: Mutex::new(HashMap::new()),
+            states: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Check whether an upstream is currently in back-off.
-    pub fn is_backed_off(&self, upstream_id: i64) -> bool {
-        let guard = self.backoffs.lock().unwrap();
-        match guard.get(&upstream_id) {
-            Some(state) => Instant::now() < state.until,
-            None => false,
+    fn recover(state: &mut HealthState, policy: AutoWeightPolicy, now: Instant) {
+        if state.score >= MAX_HEALTH_SCORE || policy.recovery_increment == 0 {
+            return;
         }
+        let interval_seconds = policy.recovery_interval.as_secs();
+        let intervals = now
+            .saturating_duration_since(state.last_adjusted_at)
+            .as_secs()
+            / interval_seconds;
+        if intervals == 0 {
+            return;
+        }
+        let recovered = policy
+            .recovery_increment
+            .saturating_mul(intervals.min(i64::MAX as u64) as i64);
+        state.score = state.score.saturating_add(recovered).min(MAX_HEALTH_SCORE);
+        state.last_adjusted_at += Duration::from_secs(interval_seconds.saturating_mul(intervals));
     }
 
-    /// Record a failure – increase the back-off duration.
-    pub fn record_failure(&self, upstream_id: i64) {
-        let mut guard = self.backoffs.lock().unwrap();
-        let entry = guard.entry(upstream_id).or_insert_with(|| BackoffState {
-            until: Instant::now(),
-            step: 0,
+    pub fn record_failure(
+        &self,
+        upstream_id: i64,
+        auto_weight_enabled: bool,
+        policy: AutoWeightPolicy,
+    ) {
+        if !auto_weight_enabled {
+            return;
+        }
+        let now = Instant::now();
+        let mut guard = self
+            .states
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let state = guard.entry(upstream_id).or_insert(HealthState {
+            score: MAX_HEALTH_SCORE,
+            last_adjusted_at: now,
         });
-
-        entry.step += 1;
-        let seconds = std::cmp::min(
-            BACKOFF_INITIAL_SECONDS + (entry.step as u64 - 1) * BACKOFF_STEP_SECONDS,
-            BACKOFF_MAX_SECONDS,
-        );
-        entry.until = Instant::now() + Duration::from_secs(seconds);
+        Self::recover(state, policy, now);
+        state.score = state.score.saturating_sub(policy.failure_penalty).max(0);
+        if policy.failure_penalty > 0 {
+            // A failure at zero restarts the full recovery interval.
+            state.last_adjusted_at = now;
+        }
+        if state.score == MAX_HEALTH_SCORE {
+            guard.remove(&upstream_id);
+        }
     }
 
-    /// Clear back-off after a successful request.
-    pub fn record_success(&self, upstream_id: i64) {
-        let mut guard = self.backoffs.lock().unwrap();
-        guard.remove(&upstream_id);
+    pub fn record_success(
+        &self,
+        upstream_id: i64,
+        auto_weight_enabled: bool,
+        policy: AutoWeightPolicy,
+    ) {
+        if !auto_weight_enabled {
+            return;
+        }
+        let now = Instant::now();
+        let mut guard = self
+            .states
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(state) = guard.get_mut(&upstream_id) else {
+            return;
+        };
+        Self::recover(state, policy, now);
+        let previous_score = state.score;
+        state.score = state
+            .score
+            .saturating_add(policy.success_increment)
+            .min(MAX_HEALTH_SCORE);
+        if state.score != previous_score {
+            state.last_adjusted_at = now;
+        }
+        if state.score == MAX_HEALTH_SCORE {
+            guard.remove(&upstream_id);
+        }
     }
 
-    /// Returns the remaining back-off seconds, if any.
-    pub fn backoff_remaining_seconds(&self, upstream_id: i64) -> Option<i64> {
-        let guard = self.backoffs.lock().unwrap();
-        guard.get(&upstream_id).and_then(|state| {
-            let now = Instant::now();
-            if now < state.until {
-                Some((state.until - now).as_secs() as i64)
-            } else {
-                None
+    pub fn snapshot(
+        &self,
+        upstream_id: i64,
+        weight: i64,
+        auto_weight_enabled: bool,
+        policy: AutoWeightPolicy,
+    ) -> HealthSnapshot {
+        let base_weight = weight.max(0) as u64;
+        if !auto_weight_enabled {
+            return HealthSnapshot {
+                score: MAX_HEALTH_SCORE,
+                routing_weight: base_weight.saturating_mul(MAX_HEALTH_SCORE as u64),
+                effective_weight: weight.max(0) as f64,
+                recovery_remaining_seconds: None,
+            };
+        }
+
+        let now = Instant::now();
+        let mut guard = self
+            .states
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut remove_recovered = false;
+        let (score, recovery_remaining_seconds) = match guard.get_mut(&upstream_id) {
+            Some(state) => {
+                Self::recover(state, policy, now);
+                remove_recovered = state.score == MAX_HEALTH_SCORE;
+                let remaining = if state.score == 0 && policy.recovery_increment > 0 {
+                    let elapsed = now.saturating_duration_since(state.last_adjusted_at);
+                    let remaining = policy.recovery_interval.saturating_sub(elapsed);
+                    Some(((remaining.as_millis() + 999) / 1_000) as i64)
+                } else {
+                    None
+                };
+                (state.score, remaining)
             }
-        })
+            None => (MAX_HEALTH_SCORE, None),
+        };
+        if remove_recovered {
+            guard.remove(&upstream_id);
+        }
+
+        HealthSnapshot {
+            score,
+            routing_weight: base_weight.saturating_mul(score as u64),
+            effective_weight: weight.max(0) as f64 * score as f64 / MAX_HEALTH_SCORE as f64,
+            recovery_remaining_seconds,
+        }
+    }
+
+    pub fn reset(&self, upstream_id: i64) {
+        self.states
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&upstream_id);
+    }
+
+    #[cfg(test)]
+    fn set_last_adjusted_at(&self, upstream_id: i64, last_adjusted_at: Instant) {
+        if let Some(state) = self
+            .states
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(&upstream_id)
+        {
+            state.last_adjusted_at = last_adjusted_at;
+        }
     }
 }
 
@@ -191,7 +321,7 @@ pub fn select_forward_model(
 
 use crate::db;
 use crate::error::AppError;
-use rand::prelude::SliceRandom;
+use rand::distributions::{Distribution, WeightedIndex};
 
 /// Core upstream selection.
 ///
@@ -199,12 +329,12 @@ use rand::prelude::SliceRandom;
 ///    (value can be an id or a name).
 /// 2. Otherwise fetch all enabled upstreams.
 /// 3. Filter by model match score, keeping only those with the highest score.
-/// 4. Group by priority and randomly pick within the highest-priority group.
-///    Prefer non-back-off upstreams, but fall back to backed-off candidates
-///    when no other matching enabled upstream is available.
+/// 4. Visit priority groups from highest to lowest. Within the first group
+///    whose total effective weight is positive, choose by weighted random.
 pub async fn select_upstream(
     pool: &sqlx::SqlitePool,
-    backoff: &BackoffManager,
+    auto_weight: &AutoWeightManager,
+    policy: AutoWeightPolicy,
     upstream_selector: Option<&str>,
     model: Option<&str>,
 ) -> Result<Option<(UpstreamRow, Option<String>)>, AppError> {
@@ -254,50 +384,59 @@ pub async fn select_upstream(
         scored.retain(|(_, s)| *s == best);
     }
 
-    // Prefer healthy candidates. A backed-off upstream remains a last-resort
-    // route so a temporary back-off never turns an otherwise usable pool into
-    // "no upstream available".
-    let mut available_by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
-    let mut backed_off_by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
+    let mut candidates_by_priority: HashMap<i32, Vec<&UpstreamRow>> = HashMap::new();
     for (up, _) in &scored {
-        if backoff.is_backed_off(up.id) {
-            backed_off_by_priority
-                .entry(up.priority)
-                .or_default()
-                .push(up);
-        } else {
-            available_by_priority
-                .entry(up.priority)
-                .or_default()
-                .push(up);
-        }
+        candidates_by_priority
+            .entry(up.priority)
+            .or_default()
+            .push(up);
     }
-
-    let candidates_by_priority = if available_by_priority.is_empty() {
-        &backed_off_by_priority
-    } else {
-        &available_by_priority
-    };
     if candidates_by_priority.is_empty() {
         return Ok(None);
     }
 
-    // Pick the highest priority within the preferred candidate set.
-    let max_priority = candidates_by_priority.keys().max().copied().unwrap();
-    let candidates = candidates_by_priority.get(&max_priority).unwrap();
+    let mut priorities: Vec<i32> = candidates_by_priority.keys().copied().collect();
+    priorities.sort_unstable_by(|left, right| right.cmp(left));
 
-    // Random choice within the group
-    let chosen = candidates.choose(&mut rand::thread_rng()).unwrap();
+    for priority in priorities {
+        let candidates = candidates_by_priority.get(&priority).unwrap();
+        let mut selectable = Vec::with_capacity(candidates.len());
+        let mut weights = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let snapshot = auto_weight.snapshot(
+                candidate.id,
+                candidate.weight,
+                candidate.auto_weight_enabled == 1,
+                policy,
+            );
+            if snapshot.routing_weight > 0 {
+                selectable.push(*candidate);
+                weights.push(snapshot.routing_weight);
+            }
+        }
+        if selectable.is_empty() {
+            continue;
+        }
+        let distribution = WeightedIndex::new(&weights)
+            .map_err(|error| AppError::Internal(format!("invalid routing weights: {error}")))?;
+        let chosen = selectable[distribution.sample(&mut rand::thread_rng())];
+        let fwd = select_forward_model(chosen, model);
+        return Ok(Some((chosen.clone(), fwd)));
+    }
 
-    let fwd = select_forward_model(chosen, model);
-
-    Ok(Some(((*chosen).clone(), fwd)))
+    Ok(None)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{select_upstream, BackoffManager};
+    use super::{select_upstream, AutoWeightManager, AutoWeightPolicy};
+    use crate::models::settings::RuntimeSettings;
     use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+    use std::time::{Duration, Instant};
+
+    fn policy() -> AutoWeightPolicy {
+        AutoWeightPolicy::from(&RuntimeSettings::default())
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -316,6 +455,8 @@ mod tests {
                 model_prefixes  TEXT NOT NULL DEFAULT '[]',
                 model_mappings  TEXT NOT NULL DEFAULT '{}',
                 priority        INTEGER NOT NULL DEFAULT 100,
+                weight          INTEGER NOT NULL DEFAULT 100,
+                auto_weight_enabled INTEGER NOT NULL DEFAULT 1,
                 enabled         INTEGER NOT NULL DEFAULT 1,
                 extra_headers   TEXT NOT NULL DEFAULT '{}',
                 timeout_seconds REAL NOT NULL DEFAULT 300.0,
@@ -330,18 +471,27 @@ mod tests {
         pool
     }
 
-    async fn insert_upstream(pool: &SqlitePool, name: &str, model_names: &[&str], priority: i32) {
+    async fn insert_upstream(
+        pool: &SqlitePool,
+        name: &str,
+        model_names: &[&str],
+        priority: i32,
+        weight: i64,
+        auto_weight_enabled: bool,
+    ) {
         sqlx::query(
             r#"
             INSERT INTO upstreams
                 (name, base_url, model_names, model_prefixes, model_mappings,
-                 priority, enabled, extra_headers, timeout_seconds)
-            VALUES (?, 'https://example.test', ?, '[]', '{}', ?, 1, '{}', 300.0)
+                 priority, weight, auto_weight_enabled, enabled, extra_headers, timeout_seconds)
+            VALUES (?, 'https://example.test', ?, '[]', '{}', ?, ?, ?, 1, '{}', 300.0)
             "#,
         )
         .bind(name)
         .bind(serde_json::to_string(model_names).unwrap())
         .bind(priority)
+        .bind(weight)
+        .bind(i64::from(auto_weight_enabled))
         .execute(pool)
         .await
         .unwrap();
@@ -350,11 +500,25 @@ mod tests {
     #[tokio::test]
     async fn pool_selection_rejects_only_enabled_channel_when_model_does_not_match() {
         let pool = test_pool().await;
-        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+        insert_upstream(
+            &pool,
+            "deepseek-only",
+            &["DeepSeek-V4-Flash"],
+            100,
+            100,
+            true,
+        )
+        .await;
 
-        let selected = select_upstream(&pool, &BackoffManager::new(), None, Some("gpt-5.5"))
-            .await
-            .unwrap();
+        let selected = select_upstream(
+            &pool,
+            &AutoWeightManager::new(),
+            policy(),
+            None,
+            Some("gpt-5.5"),
+        )
+        .await
+        .unwrap();
 
         assert!(selected.is_none());
     }
@@ -362,17 +526,19 @@ mod tests {
     #[tokio::test]
     async fn direct_selection_cannot_bypass_model_matching() {
         let pool = test_pool().await;
-        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100, 0, true).await;
+        let auto_weight = AutoWeightManager::new();
 
         let by_name = select_upstream(
             &pool,
-            &BackoffManager::new(),
+            &auto_weight,
+            policy(),
             Some("deepseek-only"),
             Some("gpt-5.5"),
         )
         .await
         .unwrap();
-        let by_id = select_upstream(&pool, &BackoffManager::new(), Some("1"), Some("gpt-5.5"))
+        let by_id = select_upstream(&pool, &auto_weight, policy(), Some("1"), Some("gpt-5.5"))
             .await
             .unwrap();
 
@@ -383,11 +549,20 @@ mod tests {
     #[tokio::test]
     async fn matching_model_still_selects_enabled_channel() {
         let pool = test_pool().await;
-        insert_upstream(&pool, "deepseek-only", &["DeepSeek-V4-Flash"], 100).await;
+        insert_upstream(
+            &pool,
+            "deepseek-only",
+            &["DeepSeek-V4-Flash"],
+            100,
+            100,
+            true,
+        )
+        .await;
 
         let selected = select_upstream(
             &pool,
-            &BackoffManager::new(),
+            &AutoWeightManager::new(),
+            policy(),
             None,
             Some("DeepSeek-V4-Flash"),
         )
@@ -397,5 +572,132 @@ mod tests {
         let (upstream, forward_model) = selected.unwrap();
         assert_eq!(upstream.name, "deepseek-only");
         assert_eq!(forward_model.as_deref(), Some("DeepSeek-V4-Flash"));
+    }
+
+    #[tokio::test]
+    async fn higher_priority_wins_even_with_a_smaller_weight() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "primary", &["model"], 999, 1, true).await;
+        insert_upstream(&pool, "fallback", &["model"], 998, 10_000, true).await;
+        let auto_weight = AutoWeightManager::new();
+
+        for _ in 0..20 {
+            let selected = select_upstream(&pool, &auto_weight, policy(), None, Some("model"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(selected.0.name, "primary");
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_base_weight_is_never_selected_from_a_weighted_group() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "zero", &["model"], 999, 0, true).await;
+        insert_upstream(&pool, "active", &["model"], 999, 1, true).await;
+        let auto_weight = AutoWeightManager::new();
+
+        for _ in 0..20 {
+            let selected = select_upstream(&pool, &auto_weight, policy(), None, Some("model"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(selected.0.name, "active");
+        }
+    }
+
+    #[tokio::test]
+    async fn model_match_score_is_resolved_before_priority() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "prefix", &[], 999, 100, true).await;
+        insert_upstream(&pool, "mapping", &[], 100, 100, true).await;
+        sqlx::query("UPDATE upstreams SET model_prefixes = '[\"gpt-\"]' WHERE name = 'prefix'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE upstreams SET model_mappings = '{\"gpt-test\":\"provider-model\"}' WHERE name = 'mapping'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let selected = select_upstream(
+            &pool,
+            &AutoWeightManager::new(),
+            policy(),
+            None,
+            Some("gpt-test"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(selected.0.name, "mapping");
+        assert_eq!(selected.1.as_deref(), Some("provider-model"));
+    }
+
+    #[tokio::test]
+    async fn zero_health_priority_group_falls_back_to_the_next_group() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "primary", &["model"], 999, 100, true).await;
+        insert_upstream(&pool, "fallback", &["model"], 998, 100, true).await;
+        let auto_weight = AutoWeightManager::new();
+        for _ in 0..5 {
+            auto_weight.record_failure(1, true, policy());
+        }
+
+        let selected = select_upstream(&pool, &auto_weight, policy(), None, Some("model"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(selected.0.name, "fallback");
+    }
+
+    #[tokio::test]
+    async fn direct_selection_bypasses_zero_weight_and_zero_health() {
+        let pool = test_pool().await;
+        insert_upstream(&pool, "direct", &["model"], 999, 0, true).await;
+        let auto_weight = AutoWeightManager::new();
+        for _ in 0..5 {
+            auto_weight.record_failure(1, true, policy());
+        }
+
+        let pooled = select_upstream(&pool, &auto_weight, policy(), None, Some("model"))
+            .await
+            .unwrap();
+        let direct = select_upstream(&pool, &auto_weight, policy(), Some("direct"), Some("model"))
+            .await
+            .unwrap();
+
+        assert!(pooled.is_none());
+        assert_eq!(direct.unwrap().0.name, "direct");
+    }
+
+    #[test]
+    fn fixed_health_adjustments_and_time_recovery_are_bounded() {
+        let auto_weight = AutoWeightManager::new();
+        for _ in 0..5 {
+            auto_weight.record_failure(7, true, policy());
+        }
+        assert_eq!(auto_weight.snapshot(7, 100, true, policy()).score, 0);
+
+        auto_weight.set_last_adjusted_at(7, Instant::now() - Duration::from_secs(61));
+        assert_eq!(auto_weight.snapshot(7, 100, true, policy()).score, 10);
+
+        auto_weight.record_success(7, true, policy());
+        assert_eq!(auto_weight.snapshot(7, 100, true, policy()).score, 15);
+    }
+
+    #[test]
+    fn disabled_auto_weight_ignores_health_updates() {
+        let auto_weight = AutoWeightManager::new();
+        for _ in 0..10 {
+            auto_weight.record_failure(9, false, policy());
+        }
+        let snapshot = auto_weight.snapshot(9, 25, false, policy());
+        assert_eq!(snapshot.score, 100);
+        assert_eq!(snapshot.routing_weight, 2_500);
     }
 }

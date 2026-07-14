@@ -6,7 +6,7 @@ use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc};
 
 use super::logging;
-use super::matcher::BackoffManager;
+use super::matcher::AutoWeightPolicy;
 
 mod headers;
 mod sse;
@@ -155,7 +155,7 @@ pub(crate) fn prepare_upstream_body(
 /// Proxy a request to the upstream, streaming SSE bodies as they arrive.
 pub async fn proxy_request(
     state: &AppState,
-    backoff: &Arc<BackoffManager>,
+    auto_weight_policy: AutoWeightPolicy,
     upstream: &UpstreamRow,
     downstream_token_id: i64,
     downstream_token_name: &str,
@@ -215,7 +215,11 @@ pub async fn proxy_request(
     let response = match req_builder.send().await {
         Ok(resp) => resp,
         Err(e) => {
-            backoff.record_failure(upstream.id);
+            state.auto_weight.record_failure(
+                upstream.id,
+                upstream.auto_weight_enabled == 1,
+                auto_weight_policy,
+            );
 
             let elapsed = start.elapsed();
             let code: i32 = if e.is_timeout() { 504 } else { 502 };
@@ -259,7 +263,7 @@ pub async fn proxy_request(
         .unwrap_or_default();
 
     let status_u16 = status.as_u16();
-    if is_sse_content_type(&content_type) {
+    if status.is_success() && is_sse_content_type(&content_type) {
         let log_entry = logging::LogEntry {
             method: method.to_string(),
             path: path.to_string(),
@@ -284,7 +288,9 @@ pub async fn proxy_request(
             log_body_max_bytes,
             log_entry,
             state.log_writer.clone(),
-            Arc::clone(backoff),
+            Arc::clone(&state.auto_weight),
+            auto_weight_policy,
+            upstream.auto_weight_enabled == 1,
             state.runtime_metrics.clone(),
             upstream.id,
         );
@@ -323,7 +329,11 @@ pub async fn proxy_request(
     let (body_bytes, streamed_first_token_ms) = match read_response_body(response, start).await {
         Ok(v) => v,
         Err(e) => {
-            backoff.record_failure(upstream.id);
+            state.auto_weight.record_failure(
+                upstream.id,
+                upstream.auto_weight_enabled == 1,
+                auto_weight_policy,
+            );
             let elapsed = start.elapsed();
             let log_entry = logging::LogEntry {
                 method: method.to_string(),
@@ -348,11 +358,18 @@ pub async fn proxy_request(
         }
     };
 
-    // Backoff bookkeeping: every non-2xx response is a temporary failure.
     if (200..300).contains(&status_u16) {
-        backoff.record_success(upstream.id);
+        state.auto_weight.record_success(
+            upstream.id,
+            upstream.auto_weight_enabled == 1,
+            auto_weight_policy,
+        );
     } else {
-        backoff.record_failure(upstream.id);
+        state.auto_weight.record_failure(
+            upstream.id,
+            upstream.auto_weight_enabled == 1,
+            auto_weight_policy,
+        );
     }
 
     let upstream_resp_snap = logging::snapshot_response(

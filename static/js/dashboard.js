@@ -108,33 +108,25 @@ function countStatusBuckets(items) {
   return { c2, c4, c5, cOther };
 }
 
-function topCounts(items, keyFn, limit = 5) {
-  const map = new Map();
-  for (const item of items) {
-    const key = keyFn(item);
-    if (!key) continue;
-    map.set(key, (map.get(key) || 0) + 1);
-  }
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), "zh"))
-    .slice(0, limit)
-    .map(([name, count]) => ({ name, count }));
-}
-
-function renderDashboardRankList(container, rows, emptyText) {
+function renderDashboardRankList(container, rows, emptyText, options = {}) {
   if (!container) return;
   if (!rows.length) {
     container.innerHTML = `<div class="dashboard-chart-empty">${escapeHtml(emptyText)}</div>`;
     return;
   }
-  const max = Math.max(...rows.map((row) => row.count), 1);
+  const formatValue = typeof options.formatValue === "function"
+    ? options.formatValue
+    : (value) => String(Math.round(value));
+  const max = Math.max(...rows.map((row) => Number(row.count) || 0), 1);
   container.innerHTML = rows.map((row) => {
-    const width = Math.max(4, (row.count / max) * 100);
+    const count = Number(row.count) || 0;
+    const displayCount = formatValue(count);
+    const width = Math.max(4, (count / max) * 100);
     return `
-      <div class="dashboard-rank-row" title="${escapeHtml(row.name)} · ${row.count}">
+      <div class="dashboard-rank-row" title="${escapeHtml(row.name)} · ${escapeHtml(displayCount)}">
         <div class="dashboard-rank-head">
           <span class="dashboard-rank-name">${escapeHtml(row.name)}</span>
-          <span class="dashboard-rank-count">${row.count}</span>
+          <span class="dashboard-rank-count">${escapeHtml(displayCount)}</span>
         </div>
         <div class="dashboard-rank-track" aria-hidden="true">
           <span class="dashboard-rank-fill" style="width:${width.toFixed(1)}%"></span>
@@ -142,6 +134,23 @@ function renderDashboardRankList(container, rows, emptyText) {
       </div>
     `;
   }).join("");
+}
+
+function dashboardTopWindowLabel(value) {
+  switch (value) {
+    case "today":
+      return "今日";
+    case "1d":
+      return "1d";
+    case "3d":
+      return "3d";
+    case "7d":
+      return "7d";
+    case "30d":
+      return "30d";
+    default:
+      return "今日";
+  }
 }
 
 function renderDashboard() {
@@ -182,8 +191,8 @@ function renderDashboard() {
 
   if (dashboardScope) {
     dashboardScope.textContent = n > 0
-      ? `基于已加载的近 ${n} 条日志与 ${totalChannels} 个渠道状态 · 非全库实时统计`
-      : "基于已加载的近窗日志与渠道状态 · 非全库实时统计";
+      ? `近窗图表基于已加载的近 ${n} 条日志与 ${totalChannels} 个渠道状态；Top 排行按所选周期查询日志库`
+      : "近窗图表基于已加载日志；Top 排行按所选周期查询日志库";
   }
 
   const errorTone = n === 0
@@ -318,20 +327,31 @@ function renderDashboard() {
     }
   }
 
-  const topModels = topCounts(items, (item) => item.model || "", 5);
-  const topChannels = topCounts(
-    items,
-    (item) => item.upstream_name || (item.upstream_id != null ? `#${item.upstream_id}` : ""),
-    5,
-  );
+  const topModelRequests = Array.isArray(dashboardTopStats?.models) ? dashboardTopStats.models : [];
+  const topChannelRequests = Array.isArray(dashboardTopStats?.channels) ? dashboardTopStats.channels : [];
+  const topModelTokens = Array.isArray(dashboardTopStats?.model_tokens) ? dashboardTopStats.model_tokens : [];
+  const topChannelTokens = Array.isArray(dashboardTopStats?.channel_tokens) ? dashboardTopStats.channel_tokens : [];
+  const topWindowLabel = dashboardTopWindowLabel(dashboardTopStats?.window || dashboardTopWindow);
   if (dashboardModelsMeta) {
-    dashboardModelsMeta.textContent = n > 0 ? `按请求数 · Top ${topModels.length || 0}` : "按请求数";
+    dashboardModelsMeta.textContent = `${topWindowLabel} · 请求 Top ${topModelRequests.length || 0}`;
   }
   if (dashboardChannelsMeta) {
-    dashboardChannelsMeta.textContent = n > 0 ? `按请求数 · Top ${topChannels.length || 0}` : "按请求数";
+    dashboardChannelsMeta.textContent = `${topWindowLabel} · 请求 Top ${topChannelRequests.length || 0}`;
   }
-  renderDashboardRankList(dashboardTopModels, topModels, "暂无模型请求数据");
-  renderDashboardRankList(dashboardTopChannels, topChannels, "暂无渠道请求数据");
+  if (dashboardModelTokensMeta) {
+    dashboardModelTokensMeta.textContent = `${topWindowLabel} · Tokens Top ${topModelTokens.length || 0}`;
+  }
+  if (dashboardChannelTokensMeta) {
+    dashboardChannelTokensMeta.textContent = `${topWindowLabel} · Tokens Top ${topChannelTokens.length || 0}`;
+  }
+  renderDashboardRankList(dashboardTopChannels, topChannelRequests, "暂无渠道请求数据");
+  renderDashboardRankList(dashboardTopChannelTokens, topChannelTokens, "暂无渠道 token 数据", {
+    formatValue: formatCompactNumber,
+  });
+  renderDashboardRankList(dashboardTopModels, topModelRequests, "暂无模型请求数据");
+  renderDashboardRankList(dashboardTopModelTokens, topModelTokens, "暂无模型 token 数据", {
+    formatValue: formatCompactNumber,
+  });
 
   if (dashboardErrorRows) {
     const errors = items
@@ -378,13 +398,13 @@ async function loadDashboardData() {
     if (!upstreamsLoadedOnce) {
       await loadUpstreams();
     } else {
-      // Refresh upstream snapshot for backoff/enabled counts without blocking on full table render paths.
+      // Refresh the upstream snapshot for enabled and runtime-health counts.
       try {
         const list = await api("/api/admin/upstreams");
         upstreams = list;
         for (const upstream of upstreams) {
-          upstream.backoffUntilMs = upstream.backoff_remaining_seconds
-            ? Date.now() + upstream.backoff_remaining_seconds * 1000
+          upstream.healthRecoveryAtMs = upstream.health_recovery_remaining_seconds
+            ? Date.now() + upstream.health_recovery_remaining_seconds * 1000
             : null;
         }
         upstreamsLoadedOnce = true;
@@ -397,14 +417,20 @@ async function loadDashboardData() {
       limit: String(DASHBOARD_LOG_LIMIT),
       offset: "0",
     });
-    const [page, tokenUsage, runtimeMetrics] = await Promise.all([
+    const topParams = new URLSearchParams({
+      window: dashboardTopWindow,
+      limit: String(DASHBOARD_TOP_LIMIT),
+    });
+    const [page, tokenUsage, runtimeMetrics, topStats] = await Promise.all([
       api(`/api/admin/logs?${params}`),
       api("/api/admin/logs/token-usage"),
       api("/api/admin/system/metrics"),
+      api(`/api/admin/logs/top?${topParams}`),
     ]);
     dashboardLogItems = page.items || [];
     dashboardTokenUsage = tokenUsage;
     dashboardRuntimeMetrics = runtimeMetrics || null;
+    dashboardTopStats = topStats || null;
     lastDashboardLoadError = "";
     renderDashboard();
   } catch (error) {

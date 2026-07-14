@@ -96,7 +96,7 @@
             <div class="panel-head">
               <div>
                 <h2>数据看板</h2>
-                <p id="dashboard-scope">基于已加载的近窗日志与渠道状态 · 非全库实时统计</p>
+                <p id="dashboard-scope">近窗图表基于已加载日志；Top 排行按所选周期查询日志库</p>
               </div>
               <div class="actions">
                 <button type="button" id="dashboard-refresh" class="secondary">刷新</button>
@@ -162,19 +162,49 @@
                 </div>
                 <div id="dashboard-latency-chart" class="dashboard-chart"></div>
               </div>
+              <div class="dashboard-ranking-toolbar">
+                <div>
+                  <h3>Top 排行</h3>
+                  <p class="dashboard-card-sub">渠道请求、渠道 Tokens、模型请求、模型 Tokens 按所选周期统计</p>
+                </div>
+                <label class="dashboard-top-window-field" for="dashboard-top-window">
+                  <span>排行周期</span>
+                  <select id="dashboard-top-window" aria-label="Top 模型和 Top 渠道统计周期">
+                    <option value="today">今日</option>
+                    <option value="1d">1d</option>
+                    <option value="3d">3d</option>
+                    <option value="7d">7d</option>
+                    <option value="30d">30d</option>
+                  </select>
+                </label>
+              </div>
               <div class="dashboard-card">
                 <div class="dashboard-card-head">
-                  <h3>Top 模型</h3>
+                  <h3>Top 渠道请求</h3>
+                  <span class="dashboard-card-meta" id="dashboard-channels-meta">按请求数</span>
+                </div>
+                <div id="dashboard-top-channels" class="dashboard-list"></div>
+              </div>
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>Top 渠道 Tokens</h3>
+                  <span class="dashboard-card-meta" id="dashboard-channel-tokens-meta">按 Tokens</span>
+                </div>
+                <div id="dashboard-top-channel-tokens" class="dashboard-list"></div>
+              </div>
+              <div class="dashboard-card">
+                <div class="dashboard-card-head">
+                  <h3>Top 模型请求</h3>
                   <span class="dashboard-card-meta" id="dashboard-models-meta">按请求数</span>
                 </div>
                 <div id="dashboard-top-models" class="dashboard-list"></div>
               </div>
               <div class="dashboard-card">
                 <div class="dashboard-card-head">
-                  <h3>Top 渠道</h3>
-                  <span class="dashboard-card-meta" id="dashboard-channels-meta">按请求数</span>
+                  <h3>Top 模型 Tokens</h3>
+                  <span class="dashboard-card-meta" id="dashboard-model-tokens-meta">按 Tokens</span>
                 </div>
-                <div id="dashboard-top-channels" class="dashboard-list"></div>
+                <div id="dashboard-top-model-tokens" class="dashboard-list"></div>
               </div>
               <div class="dashboard-card dashboard-card-wide">
                 <div class="panel-head dashboard-card-head">
@@ -207,7 +237,7 @@
             <div class="panel-head">
               <div>
                 <h2>渠道</h2>
-                <p>按优先级与模型规则路由上游请求。</p>
+                <p>按模型匹配、硬优先级和有效权重路由上游请求。</p>
               </div>
               <div class="actions">
                 <button id="quick-import" type="button" class="secondary">快速导入</button>
@@ -231,7 +261,7 @@
                   <option value="">全部</option>
                   <option value="enabled">启用</option>
                   <option value="disabled">停用</option>
-                  <option value="backoff">退避</option>
+                  <option value="health-zero">有效权重为 0</option>
                 </select>
               </label>
               <div class="toolbar-batch" id="upstream-batch-actions" hidden>
@@ -255,6 +285,7 @@
                     <th data-col="base_url">Base URL</th>
                     <th data-col="models">模型匹配</th>
                     <th data-col="priority" aria-sort="descending"><button type="button" class="table-sort-button" data-upstream-sort="priority">优先级 <span aria-hidden="true">↓</span></button></th>
+                    <th data-col="weight">权重</th>
                     <th class="col-status" data-col="status" aria-sort="none"><button type="button" class="table-sort-button" data-upstream-sort="status">状态 <span aria-hidden="true"></span></button></th>
                     <th class="col-actions" data-col="actions">操作</th>
                   </tr>
@@ -287,6 +318,18 @@
                     autocomplete="off"
                     placeholder="模型、渠道、状态码…"
                   />
+                </label>
+                <label class="log-filter">
+                  客户端
+                  <select id="log-client-filter">
+                    <option value="">全部</option>
+                    <option value="codex-desktop">codex-desktop</option>
+                    <option value="codex-tui">codex-tui</option>
+                    <option value="codex">codex</option>
+                    <option value="opencode">opencode</option>
+                    <option value="claude">claude</option>
+                    <option value="unknown">unknown</option>
+                  </select>
                 </label>
                 <label class="log-filter">
                   状态码
@@ -405,6 +448,31 @@
                 </form>
               </section>
 
+              <section class="settings-card" aria-labelledby="routing-settings-title">
+                <div class="settings-card-head"><div><h3 id="routing-settings-title">路由、自动权重与重试</h3><p>这些参数由服务端保存，并用于保存后的新请求。</p></div><span class="settings-readonly-tag">全局</span></div>
+                <div class="routing-rule-guide">
+                  <ol class="routing-rule-steps">
+                    <li><strong>模型优先</strong><span>先保留模型匹配分最高的渠道；显式指定渠道时跳过池内权重选择。</span></li>
+                    <li><strong>优先级硬分层</strong><span>只要最高 priority 组内存在有效权重大于 0 的渠道，就不会使用更低 priority。</span></li>
+                    <li><strong>同层按权重随机</strong><span>自动权重开启时，路由票数为基础权重 × 健康分；关闭时按基础权重固定分流。</span></li>
+                    <li><strong>降到 0 后切换</strong><span>某一层全部为 0 才回退到下一层。渠道恢复为正数后，高优先级层会立即重新接管流量。</span></li>
+                  </ol>
+                  <p class="routing-rule-detail">健康分范围为 0–100。所有上游非 2xx、连接失败、超时、读取失败和 SSE 上游异常都扣分；正常完成的 2xx 请求加分。健康分为 0 时退出自动池，经过完整恢复周期后增加恢复分值并重新参与选择。</p>
+                  <p class="routing-rule-detail">自动路由的每次重试都会重新选择渠道。选到不同渠道立即重试；再次选到同一渠道才等待。显式指定渠道的重试始终等待。一旦下游响应头已经提交，尤其是成功的 SSE 流，后续异常只记失败，不再透明重试。</p>
+                </div>
+                <form id="routing-settings-form" class="settings-server-form">
+                  <div class="settings-fields-grid routing-settings-grid">
+                    <label class="field"><span class="field-label">最大重试次数</span><input id="settings-max-retries" type="number" min="0" max="5" required inputmode="numeric" /><span class="field-hint">额外尝试次数；0 表示不重试。</span></label>
+                    <label class="field"><span class="field-label">同渠道重试间隔（毫秒）</span><input id="settings-same-upstream-retry-ms" type="number" min="0" max="60000" required inputmode="numeric" /><span class="field-hint">换到不同渠道时不会等待。</span></label>
+                    <label class="field"><span class="field-label">失败扣分</span><input id="settings-failure-penalty" type="number" min="0" max="100" required inputmode="numeric" /><span class="field-hint">每次渠道失败从当前健康分扣除。</span></label>
+                    <label class="field"><span class="field-label">成功加分</span><input id="settings-success-increment" type="number" min="0" max="100" required inputmode="numeric" /><span class="field-hint">每次正常完成后增加，最高为 100。</span></label>
+                    <label class="field"><span class="field-label">定时恢复分值</span><input id="settings-recovery-increment" type="number" min="0" max="100" required inputmode="numeric" /><span class="field-hint">每经过一个完整恢复周期增加的分值。</span></label>
+                    <label class="field"><span class="field-label">恢复周期（秒）</span><input id="settings-recovery-interval" type="number" min="1" max="3600" required inputmode="numeric" /><span class="field-hint">健康状态发生变化后重新开始计时。</span></label>
+                  </div>
+                  <div class="settings-save-row"><p id="routing-settings-status" class="settings-inline-status" role="status"></p><button id="routing-settings-save" type="submit">保存路由策略</button></div>
+                </form>
+              </section>
+
               <section class="settings-card" aria-labelledby="model-test-templates-title">
                 <div class="settings-card-head"><div><h3 id="model-test-templates-title">模型测试请求包装</h3><p>Codex / OpenCode 包装决定接口协议和请求头；Prompt 在测试窗口中独立选择。</p></div><button id="new-model-test-template" type="button" class="secondary">新增包装</button></div>
                 <div id="model-test-template-list" class="model-test-template-list" aria-live="polite"><p class="settings-loading">进入设置页后加载模板。</p></div>
@@ -472,14 +540,21 @@
                 <h3>模型路由</h3>
                 <p>精确模型、前缀与名称映射。</p>
               </div>
-              <button id="fetch-models" type="button" class="secondary">拉取模型</button>
+              <button id="fetch-models" type="button" class="secondary">刷新模型</button>
             </div>
             <div class="form-grid">
-              <label class="field span-2">
-                <span class="field-label">模型名</span>
-                <textarea id="model-names" rows="5" placeholder="gpt-4.1&#10;gpt-4o-mini"></textarea>
-                <span class="field-hint">每行一个模型名。</span>
-              </label>
+              <div class="field span-2">
+                <div class="model-picker-label-row">
+                  <span id="model-names-label" class="field-label">模型名</span>
+                  <span id="model-selection-count" class="model-selection-count">未选择</span>
+                </div>
+                <input id="model-names" type="hidden" />
+                <div class="model-picker" aria-labelledby="model-names-label">
+                  <div id="model-selection-preview" class="model-selection-preview" aria-live="polite"></div>
+                  <button id="manage-models" type="button" class="secondary small">管理模型</button>
+                </div>
+                <span class="field-hint">精确匹配所选模型；也可以只配置模型前缀。</span>
+              </div>
               <label class="field span-2">
                 <span class="field-label">模型前缀</span>
                 <input id="model-prefixes" placeholder="gpt-,claude-" />
@@ -497,14 +572,19 @@
             <div class="form-section-head">
               <div>
                 <h3>运行设置</h3>
-                <p>优先级、超时与启用状态。</p>
+                <p>硬优先级、同层权重、超时与启用状态。</p>
               </div>
             </div>
             <div class="form-grid">
               <label class="field">
                 <span class="field-label">优先级</span>
                 <input id="priority" type="number" min="0" max="100000" value="100" />
-                <span class="field-hint">数字越大越优先。</span>
+                <span class="field-hint">数字越大越优先；高优先级不会与低优先级混合分流。</span>
+              </label>
+              <label class="field">
+                <span class="field-label">基础权重</span>
+                <input id="weight" type="number" min="0" max="10000" value="100" required />
+                <span class="field-hint">仅在相同优先级内决定比例；0 表示不参加自动池路由。</span>
               </label>
               <label class="field">
                 <span class="field-label">超时秒数</span>
@@ -516,6 +596,13 @@
                   <span>
                     <strong>启用</strong>
                     <small>保存后参与路由选择。</small>
+                  </span>
+                </label>
+                <label class="toggle-row">
+                  <input id="auto-weight-enabled" type="checkbox" checked />
+                  <span>
+                    <strong>自动权重</strong>
+                    <small>失败扣分，成功和时间恢复；关闭后始终使用基础权重。</small>
                   </span>
                 </label>
                 <label class="toggle-row">
@@ -602,13 +689,27 @@
         <div class="model-toolbar">
           <label class="field">
             <span class="field-label">筛选</span>
-            <input id="model-filter" type="search" autocomplete="off" />
+            <input id="model-filter" type="search" autocomplete="off" placeholder="搜索模型" />
           </label>
           <div class="model-toolbar-actions">
+            <label class="model-selected-toggle">
+              <input id="model-selected-only" type="checkbox" />
+              <span>仅看已选</span>
+            </label>
             <button id="model-select-all" type="button" class="secondary">全选</button>
             <button id="model-clear-all" type="button" class="secondary">清空</button>
           </div>
         </div>
+        <details id="model-manual-entry" class="model-manual-entry">
+          <summary>手动添加</summary>
+          <div class="model-manual-entry-body">
+            <label class="field">
+              <span class="field-label">模型名</span>
+              <textarea id="model-manual-input" rows="2" spellcheck="false" placeholder="gpt-5.5&#10;gpt-5.6-sol"></textarea>
+            </label>
+            <button id="model-add-manual" type="button" class="secondary">添加到选择</button>
+          </div>
+        </details>
         <div id="model-options" class="model-options"></div>
         <div class="modal-actions">
           <button id="model-cancel-selection" type="button" class="secondary">取消</button>

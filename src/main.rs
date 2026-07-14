@@ -19,7 +19,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::proxy::matcher::BackoffManager;
+use crate::proxy::matcher::AutoWeightManager;
 use crate::state::{
     bootstrap_admin_credential, init_db, load_runtime_settings, AdminAuthCache, AppState,
     RuntimeMetrics,
@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: db.clone(),
         http_client,
         settings: settings.clone(),
-        backoff: Arc::new(BackoffManager::new()),
+        auto_weight: Arc::new(AutoWeightManager::new()),
         runtime_settings: Arc::new(tokio::sync::RwLock::new(runtime_settings)),
         admin_credential_version: Arc::new(AtomicI64::new(admin_credential.credential_version)),
         admin_credential: Arc::new(tokio::sync::RwLock::new(admin_credential)),
@@ -216,6 +216,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(handlers::admin::admin_token_usage_stats),
         )
         .route(
+            "/api/admin/logs/top",
+            get(handlers::admin::admin_top_log_stats),
+        )
+        .route(
             "/api/admin/logs/{id}",
             get(handlers::admin::admin_get_log_detail),
         );
@@ -227,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(|| async { axum::response::Redirect::to("/admin") }),
         )
         .route("/admin", get(serve_admin_html))
+        .route("/v1/models", get(handlers::proxy::list_models_handler))
         .route("/v1/{*path}", any(handlers::proxy::proxy_handler))
         .nest_service("/static", tower_http::services::ServeDir::new("static"))
         .merge(admin_routes)

@@ -2,13 +2,15 @@ use axum::{
     body::Body,
     extract::State,
     http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
-    response::Response,
+    response::{Json, Response},
 };
 use serde_json::json;
-use std::time::Instant;
+use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::middleware::auth::DownstreamAuth;
+use crate::models::upstream::UpstreamRow;
 use crate::proxy::{client, logging, matcher};
 use crate::state::AppState;
 
@@ -220,73 +222,135 @@ pub async fn proxy_handler(
     abort_log.set_model(model.as_deref());
     let selector = get_upstream_selector(&headers, query);
 
-    let selected = match matcher::select_upstream(
-        &state.db,
-        &state.backoff,
-        selector.as_deref(),
-        model.as_deref(),
-    )
-    .await
-    {
-        Ok(selected) => selected,
-        Err(error) => {
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    let auto_weight_policy = matcher::AutoWeightPolicy::from(&runtime_settings);
+    let direct_selection = if selector.is_some() {
+        match matcher::select_upstream(
+            &state.db,
+            &state.auto_weight,
+            auto_weight_policy,
+            selector.as_deref(),
+            model.as_deref(),
+        )
+        .await
+        {
+            Ok(selected) => selected,
+            Err(error) => {
+                abort_log.disarm();
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
+    let max_retries = runtime_settings.max_retries as usize;
+    let mut previous_upstream_id = None;
+    let mut last_failure: Option<Result<client::ProxyResponse, AppError>> = None;
+    let mut attempt_index = 0_usize;
+
+    let proxied = loop {
+        let selected = if selector.is_some() {
+            direct_selection.clone()
+        } else {
+            match matcher::select_upstream(
+                &state.db,
+                &state.auto_weight,
+                auto_weight_policy,
+                None,
+                model.as_deref(),
+            )
+            .await
+            {
+                Ok(selected) => selected,
+                Err(error) => {
+                    abort_log.disarm();
+                    return Err(error);
+                }
+            }
+        };
+
+        let Some((upstream, forward_model)) = selected else {
+            if let Some(failure) = last_failure.take() {
+                break failure;
+            }
             abort_log.disarm();
-            return Err(error);
-        }
-    };
+            return Ok(protocol_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                path,
+                "No enabled upstream is configured",
+                "upstream_not_configured",
+            ));
+        };
 
-    let Some((upstream, forward_model)) = selected else {
-        abort_log.disarm();
-        return Ok(protocol_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
+        if attempt_index > 0
+            && previous_upstream_id == Some(upstream.id)
+            && runtime_settings.same_upstream_retry_interval_ms > 0
+        {
+            tokio::time::sleep(Duration::from_millis(
+                runtime_settings.same_upstream_retry_interval_ms as u64,
+            ))
+            .await;
+        }
+
+        // Once a new attempt has a route, the previous buffered failure is no
+        // longer needed. Its log was already scheduled by `proxy_request`.
+        drop(last_failure.take());
+        abort_log.set_upstream(upstream.id, &upstream.name, forward_model.as_deref());
+        let log_body_max_bytes = runtime_settings.log_body_max_bytes as usize;
+        let upstream_url = client::build_upstream_url(&upstream, path, query);
+        let fwd_headers = match client::build_forward_headers(&headers, &upstream, path) {
+            Ok(headers) => headers,
+            Err(error) => {
+                abort_log.log_and_disarm(502, error.to_string());
+                return Err(error);
+            }
+        };
+        let downstream_snap = logging::snapshot_request(
+            &method,
+            &upstream_url,
+            &fwd_headers,
+            Some(&body_bytes),
+            log_body_max_bytes,
+        );
+        let upstream_body =
+            client::prepare_upstream_body(&body_bytes, forward_model.as_deref(), path);
+        let upstream_snap = logging::snapshot_request(
+            &method,
+            &upstream_url,
+            &fwd_headers,
+            Some(&upstream_body),
+            log_body_max_bytes,
+        );
+        abort_log.set_request_snapshots(downstream_snap, upstream_snap);
+
+        let result = client::proxy_request(
+            &state,
+            auto_weight_policy,
+            &upstream,
+            auth.token_id,
+            &auth.token_name,
+            &auth.client_type,
+            forward_model.as_deref(),
+            &method,
             path,
-            "No enabled upstream is configured",
-            "upstream_not_configured",
-        ));
-    };
-
-    abort_log.set_upstream(upstream.id, &upstream.name, forward_model.as_deref());
-    let log_body_max_bytes = state.runtime_settings.read().await.log_body_max_bytes as usize;
-    let upstream_url = client::build_upstream_url(&upstream, path, query);
-    let fwd_headers = match client::build_forward_headers(&headers, &upstream, path) {
-        Ok(headers) => headers,
-        Err(error) => {
-            abort_log.log_and_disarm(502, error.to_string());
-            return Err(error);
+            query,
+            &headers,
+            &body_bytes,
+        )
+        .await;
+        let failed = match &result {
+            Ok(response) => !response.status.is_success(),
+            Err(_) => true,
+        };
+        if !failed || attempt_index >= max_retries {
+            break result;
         }
-    };
-    let downstream_snap = logging::snapshot_request(
-        &method,
-        &upstream_url,
-        &fwd_headers,
-        Some(&body_bytes),
-        log_body_max_bytes,
-    );
-    let upstream_body = client::prepare_upstream_body(&body_bytes, forward_model.as_deref(), path);
-    let upstream_snap = logging::snapshot_request(
-        &method,
-        &upstream_url,
-        &fwd_headers,
-        Some(&upstream_body),
-        log_body_max_bytes,
-    );
-    abort_log.set_request_snapshots(downstream_snap, upstream_snap);
 
-    let proxied = client::proxy_request(
-        &state,
-        &state.backoff,
-        &upstream,
-        auth.token_id,
-        &auth.token_name,
-        &auth.client_type,
-        forward_model.as_deref(),
-        &method,
-        path,
-        query,
-        &headers,
-        &body_bytes,
-    )
-    .await;
+        previous_upstream_id = Some(upstream.id);
+        last_failure = Some(result);
+        attempt_index += 1;
+    };
     abort_log.disarm();
     let client::ProxyResponse {
         status,
@@ -313,18 +377,78 @@ pub async fn proxy_handler(
     Ok(response)
 }
 
+/// Collect unique model ids from enabled upstream configs (names + mapping keys).
+fn aggregate_model_ids(upstreams: &[UpstreamRow]) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+
+    for upstream in upstreams {
+        if let Ok(names) = serde_json::from_str::<Vec<String>>(&upstream.model_names) {
+            for name in names {
+                let name = name.trim();
+                if !name.is_empty() {
+                    ids.insert(name.to_string());
+                }
+            }
+        }
+
+        if let Ok(mappings) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            &upstream.model_mappings,
+        ) {
+            for key in mappings.keys() {
+                let key = key.trim();
+                if !key.is_empty() {
+                    ids.insert(key.to_string());
+                }
+            }
+        }
+        // model_prefixes intentionally ignored — prefixes cannot expand to concrete ids.
+    }
+
+    ids.into_iter().collect()
+}
+
+fn openai_models_list_response(ids: Vec<String>) -> serde_json::Value {
+    let data: Vec<serde_json::Value> = ids
+        .into_iter()
+        .map(|id| {
+            json!({
+                "id": id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "wildtoken"
+            })
+        })
+        .collect();
+
+    json!({
+        "object": "list",
+        "data": data
+    })
+}
+
+/// GET /v1/models — aggregate model list from all enabled upstreams.
+pub async fn list_models_handler(
+    State(state): State<AppState>,
+    _auth: DownstreamAuth,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let upstreams = crate::db::upstream::list_enabled_upstreams(&state.db).await?;
+    let ids = aggregate_model_ids(&upstreams);
+    Ok(Json(openai_models_list_response(ids)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::proxy_handler;
+    use super::{aggregate_model_ids, openai_models_list_response, proxy_handler};
+    use crate::models::upstream::UpstreamRow;
     use crate::{
         config::Settings,
         models::settings::{AdminCredential, RuntimeSettings},
-        proxy::matcher::BackoffManager,
+        proxy::matcher::AutoWeightManager,
         state::{init_db, AdminAuthCache, AppState, RuntimeMetrics},
     };
     use axum::{
-        body::{Body, Bytes},
-        http::{header, StatusCode},
+        body::{to_bytes, Body, Bytes},
+        http::{header, Request, StatusCode},
         response::Response,
         routing::{any, post},
         Router,
@@ -333,14 +457,215 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
     use std::{
         convert::Infallible,
-        sync::{atomic::AtomicI64, Arc},
+        sync::{
+            atomic::{AtomicI64, AtomicUsize, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     };
     use tokio::sync::{Notify, RwLock};
+    use tower::ServiceExt;
 
     const FIRST_EVENT: &[u8] = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n";
     const FINAL_EVENT_HEADER: &[u8] = b"event: response.completed\n";
     const FINAL_EVENT_DATA: &[u8] = b"data: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"effort\":\"high\"},\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n";
+
+    async fn test_proxy_state(db: sqlx::SqlitePool, runtime_settings: RuntimeSettings) -> AppState {
+        let runtime_metrics = Arc::new(RuntimeMetrics::new());
+        let log_stats = Arc::new(crate::db::log_stats::LogStatsCache::empty());
+        let log_writer = crate::proxy::logging::spawn_log_writer(
+            db.clone(),
+            runtime_metrics.clone(),
+            log_stats.clone(),
+            Settings::default().logging.log_queue_capacity,
+        );
+        AppState {
+            db,
+            http_client: reqwest::Client::new(),
+            settings: Settings::default(),
+            auto_weight: Arc::new(AutoWeightManager::new()),
+            runtime_settings: Arc::new(RwLock::new(runtime_settings)),
+            admin_credential: Arc::new(RwLock::new(AdminCredential {
+                credential_hash: "test".into(),
+                credential_version: 1,
+            })),
+            admin_credential_version: Arc::new(AtomicI64::new(1)),
+            admin_auth_cache: Arc::new(AdminAuthCache::new()),
+            runtime_metrics,
+            log_writer,
+            log_stats,
+            started_at: Instant::now(),
+        }
+    }
+
+    async fn proxy_test_database() -> sqlx::SqlitePool {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&db).await.unwrap();
+        sqlx::query(
+            "INSERT INTO api_tokens (name, token) VALUES ('retry-test', 'downstream-secret')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        db
+    }
+
+    fn proxy_request_for(model: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header(header::AUTHORIZATION, "Bearer downstream-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(r#"{{"model":"{model}","input":[]}}"#)))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn explicit_channel_retry_waits_even_after_health_reaches_zero() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let upstream_attempts = Arc::clone(&attempts);
+        let upstream_app = Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let attempts = Arc::clone(&upstream_attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (StatusCode::BAD_GATEWAY, "first failure")
+                    } else {
+                        (StatusCode::OK, "second success")
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let upstream_server =
+            tokio::spawn(async move { axum::serve(listener, upstream_app).await.unwrap() });
+
+        let db = proxy_test_database().await;
+        sqlx::query(
+            r#"INSERT INTO upstreams
+               (name, base_url, model_names, priority, weight, auto_weight_enabled)
+               VALUES ('single', ?, '["retry-model"]', 999, 100, 1)"#,
+        )
+        .bind(format!("http://{upstream_address}"))
+        .execute(&db)
+        .await
+        .unwrap();
+        let mut runtime_settings = RuntimeSettings::default();
+        runtime_settings.max_retries = 1;
+        runtime_settings.same_upstream_retry_interval_ms = 120;
+        runtime_settings.auto_weight_failure_penalty = 100;
+        let state = test_proxy_state(db, runtime_settings.clone()).await;
+        let app = Router::new()
+            .route("/v1/{*path}", any(proxy_handler))
+            .with_state(state.clone());
+        let mut request = proxy_request_for("retry-model");
+        request
+            .headers_mut()
+            .insert("x-wildtoken-upstream", "single".parse().unwrap());
+
+        let started_at = Instant::now();
+        let response = app.oneshot(request).await.unwrap();
+        let elapsed = started_at.elapsed();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(elapsed >= Duration::from_millis(100));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            state
+                .auto_weight
+                .snapshot(
+                    1,
+                    100,
+                    true,
+                    crate::proxy::matcher::AutoWeightPolicy::from(&runtime_settings),
+                )
+                .score,
+            5
+        );
+        upstream_server.abort();
+    }
+
+    #[tokio::test]
+    async fn retrying_on_a_different_channel_does_not_wait() {
+        let primary_attempts = Arc::new(AtomicUsize::new(0));
+        let fallback_attempts = Arc::new(AtomicUsize::new(0));
+        let primary_counter = Arc::clone(&primary_attempts);
+        let fallback_counter = Arc::clone(&fallback_attempts);
+        let upstream_app = Router::new().route(
+            "/v1/responses",
+            post(move |headers: axum::http::HeaderMap| {
+                let primary = Arc::clone(&primary_counter);
+                let fallback = Arc::clone(&fallback_counter);
+                async move {
+                    if headers
+                        .get("x-channel")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("primary")
+                    {
+                        primary.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(StatusCode::SERVICE_UNAVAILABLE)
+                            .header(header::CONTENT_TYPE, "text/event-stream")
+                            .body(Body::from("data: upstream failed\n\n"))
+                            .unwrap()
+                    } else {
+                        fallback.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(r#"{"source":"fallback"}"#))
+                            .unwrap()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let upstream_server =
+            tokio::spawn(async move { axum::serve(listener, upstream_app).await.unwrap() });
+
+        let db = proxy_test_database().await;
+        let base_url = format!("http://{upstream_address}");
+        sqlx::query(
+            r#"INSERT INTO upstreams
+               (name, base_url, model_names, priority, weight, extra_headers)
+               VALUES
+               ('primary', ?, '["retry-model"]', 999, 100, '{"X-Channel":"primary"}'),
+               ('fallback', ?, '["retry-model"]', 998, 100, '{"X-Channel":"fallback"}')"#,
+        )
+        .bind(&base_url)
+        .bind(&base_url)
+        .execute(&db)
+        .await
+        .unwrap();
+        let mut runtime_settings = RuntimeSettings::default();
+        runtime_settings.max_retries = 1;
+        runtime_settings.same_upstream_retry_interval_ms = 1_000;
+        runtime_settings.auto_weight_failure_penalty = 100;
+        let state = test_proxy_state(db, runtime_settings).await;
+        let app = Router::new()
+            .route("/v1/{*path}", any(proxy_handler))
+            .with_state(state);
+
+        let response = tokio::time::timeout(
+            Duration::from_millis(700),
+            app.oneshot(proxy_request_for("retry-model")),
+        )
+        .await
+        .expect("a retry on a different channel waited unnecessarily")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body, r#"{"source":"fallback"}"#);
+        assert_eq!(primary_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_attempts.load(Ordering::SeqCst), 1);
+        upstream_server.abort();
+    }
 
     #[tokio::test]
     async fn sse_is_streamed_end_to_end_and_logged_after_completion() {
@@ -430,7 +755,7 @@ mod tests {
             db: db.clone(),
             http_client: reqwest::Client::new(),
             settings: Settings::default(),
-            backoff: Arc::new(BackoffManager::new()),
+            auto_weight: Arc::new(AutoWeightManager::new()),
             runtime_settings: Arc::new(RwLock::new(runtime_settings)),
             admin_credential: Arc::new(RwLock::new(AdminCredential {
                 credential_hash: "test".into(),
@@ -555,5 +880,101 @@ mod tests {
 
         proxy_server.abort();
         upstream_server.abort();
+    }
+
+    fn sample_upstream(
+        model_names: &str,
+        model_prefixes: &str,
+        model_mappings: &str,
+    ) -> UpstreamRow {
+        UpstreamRow {
+            id: 1,
+            name: "test".into(),
+            base_url: "http://example.com".into(),
+            api_key: None,
+            model_names: model_names.into(),
+            model_prefixes: model_prefixes.into(),
+            model_mappings: model_mappings.into(),
+            priority: 0,
+            weight: 1,
+            auto_weight_enabled: 0,
+            enabled: 1,
+            extra_headers: "{}".into(),
+            timeout_seconds: 30.0,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn list_models_empty_upstreams() {
+        let ids = aggregate_model_ids(&[]);
+        assert!(ids.is_empty());
+        let resp = openai_models_list_response(ids);
+        assert_eq!(resp["object"], "list");
+        assert_eq!(resp["data"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_models_from_model_names() {
+        let ups = vec![sample_upstream(r#"["gpt-4","gpt-3.5-turbo"]"#, "[]", "{}")];
+        let ids = aggregate_model_ids(&ups);
+        assert_eq!(ids, vec!["gpt-3.5-turbo".to_string(), "gpt-4".to_string()]);
+    }
+
+    #[test]
+    fn list_models_mappings_keys_only() {
+        let ups = vec![sample_upstream(
+            "[]",
+            "[]",
+            r#"{"gpt-4":"provider-gpt-4","claude":"anthropic-claude"}"#,
+        )];
+        let ids = aggregate_model_ids(&ups);
+        assert_eq!(ids, vec!["claude".to_string(), "gpt-4".to_string()]);
+        assert!(!ids.iter().any(|id| id == "provider-gpt-4"));
+        assert!(!ids.iter().any(|id| id == "anthropic-claude"));
+    }
+
+    #[test]
+    fn list_models_dedupes_overlapping() {
+        let ups = vec![
+            sample_upstream(r#"["gpt-4","gpt-3.5"]"#, "[]", r#"{"gpt-4":"mapped"}"#),
+            sample_upstream(r#"["gpt-4","o1"]"#, "[]", "{}"),
+        ];
+        let ids = aggregate_model_ids(&ups);
+        assert_eq!(
+            ids,
+            vec!["gpt-3.5".to_string(), "gpt-4".to_string(), "o1".to_string()]
+        );
+    }
+
+    #[test]
+    fn list_models_ignores_prefixes() {
+        let ups = vec![sample_upstream("[]", r#"["gpt-","claude-"]"#, "{}")];
+        let ids = aggregate_model_ids(&ups);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn list_models_skips_invalid_json_fields() {
+        let ups = vec![sample_upstream(
+            "not-json",
+            "[]",
+            r#"{"valid-key":"value"}"#,
+        )];
+        let ids = aggregate_model_ids(&ups);
+        assert_eq!(ids, vec!["valid-key".to_string()]);
+    }
+
+    #[test]
+    fn list_models_response_shape() {
+        let resp = openai_models_list_response(vec!["gpt-4".into()]);
+        assert_eq!(resp["object"], "list");
+        let data = resp["data"].as_array().unwrap();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], "gpt-4");
+        assert_eq!(data[0]["object"], "model");
+        assert_eq!(data[0]["created"], 0);
+        assert_eq!(data[0]["owned_by"], "wildtoken");
     }
 }

@@ -82,10 +82,12 @@ function payloadFromForm() {
     name: fields.name.value.trim(),
     base_url: fields.baseUrl.value.trim(),
     api_key: fields.apiKey.value.trim() || null,
-    model_names: splitList(fields.modelNames.value),
+    model_names: getFormModels(),
     model_prefixes: splitList(fields.modelPrefixes.value),
     model_mappings: modelMappings,
     priority: Number(fields.priority.value || 100),
+    weight: Number(fields.weight.value),
+    auto_weight_enabled: fields.autoWeightEnabled.checked,
     timeout_seconds: Number(fields.timeoutSeconds.value || 300),
     enabled: fields.enabled.checked,
     extra_headers: extraHeaders,
@@ -231,10 +233,12 @@ async function editUpstream(upstream) {
     fields.baseUrl.value = detail.base_url;
     fields.apiKey.value = detail.api_key || "";
     persistedFormApiKey = detail.api_key || null;
-    fields.modelNames.value = joinList(detail.model_names);
+    setFormModels(detail.model_names);
     fields.modelPrefixes.value = joinList(detail.model_prefixes);
     fields.modelMappings.value = joinModelMappings(detail.model_mappings);
     fields.priority.value = detail.priority;
+    fields.weight.value = detail.weight;
+    fields.autoWeightEnabled.checked = detail.auto_weight_enabled;
     fields.timeoutSeconds.value = detail.timeout_seconds;
     fields.extraHeaders.value = JSON.stringify(detail.extra_headers || {}, null, 2);
     fields.enabled.checked = detail.enabled;
@@ -252,10 +256,12 @@ function duplicateUpstream(upstream) {
   resetForm();
   fields.name.value = `${upstream.name} 副本`;
   fields.baseUrl.value = upstream.base_url;
-  fields.modelNames.value = joinList(upstream.model_names);
+  setFormModels(upstream.model_names);
   fields.modelPrefixes.value = joinList(upstream.model_prefixes);
   fields.modelMappings.value = joinModelMappings(upstream.model_mappings);
   fields.priority.value = upstream.priority;
+  fields.weight.value = upstream.weight;
+  fields.autoWeightEnabled.checked = upstream.auto_weight_enabled;
   fields.timeoutSeconds.value = upstream.timeout_seconds;
   fields.extraHeaders.value = JSON.stringify(upstream.extra_headers || {}, null, 2);
   fields.enabled.checked = upstream.enabled;
@@ -315,13 +321,27 @@ function resetForm() {
   fields.id.value = "";
   persistedFormApiKey = null;
   fields.priority.value = 100;
+  fields.weight.value = 100;
   fields.timeoutSeconds.value = 300;
+  setFormModels([]);
   fields.modelMappings.value = "";
   fields.extraHeaders.value = "{}";
   fields.enabled.checked = true;
+  fields.autoWeightEnabled.checked = true;
   setAdvancedSettingsOpen(false);
   fetchModelsButton.disabled = false;
   formTitle.textContent = "新增渠道";
+}
+
+function formatEffectiveWeight(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatZeroWeightNote(upstream, remainingRecovery) {
+  if (Number(upstream.weight) === 0) return "基础权重 0 · 不参与自动路由";
+  return formatHealthZeroNote(remainingRecovery);
 }
 
 function renderRows() {
@@ -336,7 +356,7 @@ function renderRows() {
   rows.innerHTML = "";
   renderUpstreamSummary();
 
-  const colCount = 8;
+  const colCount = 9;
 
   if (upstreamsLoading && !upstreamsLoadedOnce) {
     rows.innerHTML = skeletonRowsMarkup(colCount, 6);
@@ -375,7 +395,7 @@ function renderRows() {
     const row = document.createElement("tr");
     row.className = upstream.enabled ? "" : "row-disabled";
     row.dataset.upstreamId = String(upstream.id);
-    const remainingBackoff = liveBackoffSeconds(upstream);
+    const remainingRecovery = liveHealthRecoverySeconds(upstream);
     const checked = selectedUpstreamIds.has(upstream.id) ? "checked" : "";
     row.innerHTML = `
       <td class="col-check" data-col="check">
@@ -418,6 +438,12 @@ function renderRows() {
           hidden
         />
       </td>
+      <td class="col-weight" data-col="weight">
+        <div class="weight-stack">
+          <strong>${formatEffectiveWeight(upstream.effective_weight)}</strong>
+          <span>${upstream.auto_weight_enabled ? `基础 ${upstream.weight} · 健康 ${upstream.runtime_health_score}` : `基础 ${upstream.weight} · 固定`}</span>
+        </div>
+      </td>
       <td class="col-status" data-col="status">
         <div class="status-stack">
           <button
@@ -436,10 +462,10 @@ function renderRows() {
           </button>
         </div>
         <span
-          class="backoff-note"
-          data-backoff-id="${upstream.id}"
-          ${remainingBackoff ? "" : "hidden"}
-        >${remainingBackoff ? formatBackoffNote(remainingBackoff) : ""}</span>
+          class="effective-zero-note"
+          data-effective-zero-id="${upstream.id}"
+          ${Number(upstream.effective_weight) <= 0 ? "" : "hidden"}
+        >${Number(upstream.effective_weight) <= 0 ? formatZeroWeightNote(upstream, remainingRecovery) : ""}</span>
       </td>
       <td class="row-actions col-actions" data-col="actions">
         <button
@@ -515,21 +541,20 @@ async function batchSetEnabled(enabled) {
   }
 }
 
-function liveBackoffSeconds(upstream) {
-  if (!upstream.backoffUntilMs) {
+function liveHealthRecoverySeconds(upstream) {
+  if (!upstream.healthRecoveryAtMs) {
     return 0;
   }
-  return Math.max(0, Math.ceil((upstream.backoffUntilMs - Date.now()) / 1000));
+  return Math.max(0, Math.ceil((upstream.healthRecoveryAtMs - Date.now()) / 1000));
 }
 
-function updateBackoffNotes() {
-  for (const note of rows.querySelectorAll("[data-backoff-id]")) {
-    const upstream = upstreams.find((item) => item.id === Number(note.dataset.backoffId));
-    const remaining = upstream ? liveBackoffSeconds(upstream) : 0;
-    note.textContent = remaining ? formatBackoffNote(remaining) : "";
-    note.hidden = remaining === 0;
+function updateHealthNotes() {
+  for (const note of rows.querySelectorAll("[data-effective-zero-id]")) {
+    const upstream = upstreams.find((item) => item.id === Number(note.dataset.effectiveZeroId));
+    const remaining = upstream ? liveHealthRecoverySeconds(upstream) : 0;
+    note.textContent = upstream ? formatZeroWeightNote(upstream, remaining) : "";
+    note.hidden = !upstream || Number(upstream.effective_weight) > 0;
   }
-  // Partial update only — avoid re-rendering entire upstream table.
   scheduleRenderUpstreamSummary();
 }
 
@@ -609,8 +634,8 @@ async function loadUpstreams() {
   try {
     upstreams = await api("/api/admin/upstreams");
     for (const upstream of upstreams) {
-      upstream.backoffUntilMs = upstream.backoff_remaining_seconds
-        ? Date.now() + upstream.backoff_remaining_seconds * 1000
+      upstream.healthRecoveryAtMs = upstream.health_recovery_remaining_seconds
+        ? Date.now() + upstream.health_recovery_remaining_seconds * 1000
         : null;
     }
     upstreamsLoadedOnce = true;

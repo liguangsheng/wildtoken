@@ -116,7 +116,7 @@ function getFilteredUpstreams() {
   return upstreams.filter((upstream) => {
     if (status === "enabled" && !upstream.enabled) return false;
     if (status === "disabled" && upstream.enabled) return false;
-    if (status === "backoff" && liveBackoffSeconds(upstream) <= 0) return false;
+    if (status === "health-zero" && Number(upstream.effective_weight) > 0) return false;
     if (!query) return true;
     const haystack = [
       upstream.name,
@@ -135,7 +135,7 @@ function getFilteredUpstreams() {
 
 function upstreamStatusRank(upstream) {
   if (!upstream.enabled) return 2;
-  return liveBackoffSeconds(upstream) > 0 ? 1 : 0;
+  return Number(upstream.effective_weight) <= 0 ? 1 : 0;
 }
 
 function compareUpstreams(left, right) {
@@ -225,6 +225,7 @@ function clearTokenFilters() {
 function clearLogFilters() {
   if (logSearchInput) logSearchInput.value = "";
   if (logStatusFilter) logStatusFilter.value = "";
+  if (logClientFilter) logClientFilter.value = "";
   resetLogPagination();
   loadLogs();
 }
@@ -319,10 +320,10 @@ function switchView(name) {
   if (name === "upstreams") {
     loadUpstreams();
     startUpstreamRefresh();
-    startBackoffTick();
+    startHealthTick();
   } else {
     stopUpstreamRefresh();
-    stopBackoffTick();
+    stopHealthTick();
   }
   if (name === "tokens") {
     loadTokens();
@@ -375,19 +376,19 @@ function stopUpstreamRefresh() {
   updateLiveIndicator();
 }
 
-function startBackoffTick() {
-  if (backoffTickTimer !== null || !pageVisible) {
+function startHealthTick() {
+  if (healthTickTimer !== null || !pageVisible) {
     return;
   }
-  backoffTickTimer = window.setInterval(updateBackoffNotes, BACKOFF_TICK_MS);
+  healthTickTimer = window.setInterval(updateHealthNotes, HEALTH_TICK_MS);
 }
 
-function stopBackoffTick() {
-  if (backoffTickTimer === null) {
+function stopHealthTick() {
+  if (healthTickTimer === null) {
     return;
   }
-  window.clearInterval(backoffTickTimer);
-  backoffTickTimer = null;
+  window.clearInterval(healthTickTimer);
+  healthTickTimer = null;
 }
 
 function stopLogRefresh() {
@@ -423,7 +424,7 @@ function pauseAllAutoRefresh() {
   stopLogRefresh();
   stopUpstreamRefresh();
   stopTokenRefresh();
-  stopBackoffTick();
+  stopHealthTick();
   stopDashboardRefresh();
   stopSystemUptimeTicker();
   updateLiveIndicator();
@@ -441,7 +442,7 @@ function resumeAutoRefreshForCurrentView() {
     startLogRefresh();
   } else if (name === "upstreams") {
     startUpstreamRefresh();
-    startBackoffTick();
+    startHealthTick();
   } else if (name === "tokens") {
     startTokenRefresh();
   } else if (name === "settings") {
@@ -531,6 +532,12 @@ function setSettingsStatus(message = "", tone = "") {
   serverSettingsStatus.dataset.tone = tone;
 }
 
+function setRoutingSettingsStatus(message = "", tone = "") {
+  if (!routingSettingsStatus) return;
+  routingSettingsStatus.textContent = message;
+  routingSettingsStatus.dataset.tone = tone;
+}
+
 function updatePreferenceControls() {
   const theme = getStoredTheme();
   const density = getDensity();
@@ -551,8 +558,15 @@ function fillServerSettings(settings) {
   settingsBodyKeepCount.value = settings.log_body_keep_count;
   settingsRetentionDays.value = settings.log_retention_days;
   settingsBodyMaxBytes.value = settings.log_body_max_bytes;
+  settingsMaxRetries.value = settings.max_retries;
+  settingsSameUpstreamRetryMs.value = settings.same_upstream_retry_interval_ms;
+  settingsFailurePenalty.value = settings.auto_weight_failure_penalty;
+  settingsSuccessIncrement.value = settings.auto_weight_success_increment;
+  settingsRecoveryIncrement.value = settings.auto_weight_recovery_increment;
+  settingsRecoveryInterval.value = settings.auto_weight_recovery_interval_seconds;
   settingsRevision.textContent = `修订 ${settings.revision} · ${settings.updated_at || "刚刚更新"}`;
   setSettingsStatus("");
+  setRoutingSettingsStatus("");
 }
 
 function formatBytes(value) {
@@ -680,6 +694,7 @@ async function loadSettingsPage() {
   } catch (error) {
     if (currentViewFromHash() === "settings") {
       setSettingsStatus("无法加载设置，请检查连接后重试。", "error");
+      setRoutingSettingsStatus("无法加载路由策略，请检查连接后重试。", "error");
       if (systemInfoGrid) systemInfoGrid.innerHTML = `<p class="settings-loading">运行信息暂不可用。</p>`;
     }
   }
@@ -812,16 +827,30 @@ function closeModelTestTemplateDialog() {
   else modelTestTemplateDialog.removeAttribute("open");
 }
 
-async function saveServerSettings(event) {
-  event.preventDefault();
-  if (!loadedServerSettings) return;
-  const payload = {
+function runtimeSettingsPayload() {
+  return {
     log_body_keep_count: Number(settingsBodyKeepCount.value),
     log_retention_days: Number(settingsRetentionDays.value),
     log_body_max_bytes: Number(settingsBodyMaxBytes.value),
+    max_retries: Number(settingsMaxRetries.value),
+    same_upstream_retry_interval_ms: Number(settingsSameUpstreamRetryMs.value),
+    auto_weight_failure_penalty: Number(settingsFailurePenalty.value),
+    auto_weight_success_increment: Number(settingsSuccessIncrement.value),
+    auto_weight_recovery_increment: Number(settingsRecoveryIncrement.value),
+    auto_weight_recovery_interval_seconds: Number(settingsRecoveryInterval.value),
     revision: loadedServerSettings.revision,
   };
-  if (!Number.isInteger(payload.log_body_keep_count) || !Number.isInteger(payload.log_retention_days) || !Number.isInteger(payload.log_body_max_bytes)) {
+}
+
+function runtimeSettingsAreIntegers(payload) {
+  return Object.entries(payload).every(([key, value]) => key === "revision" || Number.isInteger(value));
+}
+
+async function saveServerSettings(event) {
+  event.preventDefault();
+  if (!loadedServerSettings) return;
+  const payload = runtimeSettingsPayload();
+  if (!runtimeSettingsAreIntegers(payload)) {
     setSettingsStatus("请填写有效的整数。", "error");
     return;
   }
@@ -840,6 +869,34 @@ async function saveServerSettings(event) {
       setSettingsStatus("设置已被其他操作更新，已重新加载最新值；请确认后再保存。", "error");
     } else {
       setSettingsStatus("保存失败，请稍后重试。", "error");
+    }
+  } finally {
+    saveButton.disabled = false;
+  }
+}
+
+async function saveRoutingSettings(event) {
+  event.preventDefault();
+  if (!loadedServerSettings) return;
+  const payload = runtimeSettingsPayload();
+  if (!runtimeSettingsAreIntegers(payload)) {
+    setRoutingSettingsStatus("请填写有效的整数。", "error");
+    return;
+  }
+  const saveButton = document.querySelector("#routing-settings-save");
+  saveButton.disabled = true;
+  setRoutingSettingsStatus("正在保存…");
+  try {
+    const updated = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify(payload) });
+    fillServerSettings(updated);
+    setRoutingSettingsStatus("路由策略已保存。", "ok");
+    await loadUpstreams();
+  } catch (error) {
+    if (error.status === 409) {
+      await loadSettingsPage();
+      setRoutingSettingsStatus("设置已被其他操作更新，已重新加载最新值；请确认后再保存。", "error");
+    } else {
+      setRoutingSettingsStatus("保存失败，请检查参数后重试。", "error");
     }
   } finally {
     saveButton.disabled = false;

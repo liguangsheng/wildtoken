@@ -163,7 +163,12 @@ pub async fn rotate_admin_credential(
 
 pub async fn load_runtime_settings(pool: &SqlitePool) -> Result<Option<RuntimeSettings>, AppError> {
     Ok(sqlx::query_as::<_, RuntimeSettings>(
-        "SELECT log_body_keep_count, log_retention_days, log_body_max_bytes, revision, updated_at FROM runtime_settings WHERE id = 1",
+        r#"SELECT log_body_keep_count, log_retention_days, log_body_max_bytes,
+                  max_retries, same_upstream_retry_interval_ms,
+                  auto_weight_failure_penalty, auto_weight_success_increment,
+                  auto_weight_recovery_increment, auto_weight_recovery_interval_seconds,
+                  revision, updated_at
+           FROM runtime_settings WHERE id = 1"#,
     )
     .fetch_optional(pool)
     .await?)
@@ -175,11 +180,23 @@ pub async fn update_runtime_settings(
 ) -> Result<RuntimeSettings, AppError> {
     let mut tx = pool.begin().await?;
     let result = sqlx::query(
-        "UPDATE runtime_settings SET log_body_keep_count = ?, log_retention_days = ?, log_body_max_bytes = ?, revision = revision + 1, updated_at = datetime('now') WHERE id = 1 AND revision = ?",
+        r#"UPDATE runtime_settings
+           SET log_body_keep_count = ?, log_retention_days = ?, log_body_max_bytes = ?,
+               max_retries = ?, same_upstream_retry_interval_ms = ?,
+               auto_weight_failure_penalty = ?, auto_weight_success_increment = ?,
+               auto_weight_recovery_increment = ?, auto_weight_recovery_interval_seconds = ?,
+               revision = revision + 1, updated_at = datetime('now')
+           WHERE id = 1 AND revision = ?"#,
     )
     .bind(input.log_body_keep_count)
     .bind(input.log_retention_days)
     .bind(input.log_body_max_bytes)
+    .bind(input.max_retries)
+    .bind(input.same_upstream_retry_interval_ms)
+    .bind(input.auto_weight_failure_penalty)
+    .bind(input.auto_weight_success_increment)
+    .bind(input.auto_weight_recovery_increment)
+    .bind(input.auto_weight_recovery_interval_seconds)
     .bind(input.revision)
     .execute(&mut *tx)
     .await?;
@@ -189,7 +206,12 @@ pub async fn update_runtime_settings(
         ));
     }
     let mut updated = sqlx::query_as::<_, RuntimeSettings>(
-        "SELECT log_body_keep_count, log_retention_days, log_body_max_bytes, revision, updated_at FROM runtime_settings WHERE id = 1",
+        r#"SELECT log_body_keep_count, log_retention_days, log_body_max_bytes,
+                  max_retries, same_upstream_retry_interval_ms,
+                  auto_weight_failure_penalty, auto_weight_success_increment,
+                  auto_weight_recovery_increment, auto_weight_recovery_interval_seconds,
+                  revision, updated_at
+           FROM runtime_settings WHERE id = 1"#,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -220,11 +242,23 @@ mod tests {
             log_body_keep_count: 99,
             log_retention_days: 30,
             log_body_max_bytes: 200_000,
+            max_retries: 2,
+            same_upstream_retry_interval_ms: 2_500,
+            auto_weight_failure_penalty: 25,
+            auto_weight_success_increment: 8,
+            auto_weight_recovery_increment: 12,
+            auto_weight_recovery_interval_seconds: 90,
             revision: 1,
         };
 
         let updated = update_runtime_settings(&pool, &input).await.unwrap();
         assert_eq!(updated.revision, 2);
+        assert_eq!(updated.max_retries, 2);
+        assert_eq!(updated.same_upstream_retry_interval_ms, 2_500);
+        assert_eq!(updated.auto_weight_failure_penalty, 25);
+        assert_eq!(updated.auto_weight_success_increment, 8);
+        assert_eq!(updated.auto_weight_recovery_increment, 12);
+        assert_eq!(updated.auto_weight_recovery_interval_seconds, 90);
         assert!(update_runtime_settings(&pool, &input).await.is_err());
     }
 

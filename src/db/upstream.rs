@@ -2,9 +2,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::models::upstream::{
-    UpstreamDetailOut, UpstreamIn, UpstreamOut, UpstreamRow, UpstreamUpdate,
-};
+use crate::models::upstream::{UpstreamIn, UpstreamOut, UpstreamRow, UpstreamUpdate};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -16,10 +14,7 @@ fn parse_json_map(s: &str) -> Result<HashMap<String, String>, AppError> {
     serde_json::from_str(s).map_err(AppError::Json)
 }
 
-fn row_to_upstream_out(
-    row: &UpstreamRow,
-    backoff_remaining: Option<i64>,
-) -> Result<UpstreamOut, AppError> {
+fn row_to_upstream_out(row: &UpstreamRow) -> Result<UpstreamOut, AppError> {
     Ok(UpstreamOut {
         id: row.id,
         name: row.name.clone(),
@@ -29,35 +24,16 @@ fn row_to_upstream_out(
         model_prefixes: parse_json_array(&row.model_prefixes)?,
         model_mappings: parse_json_map(&row.model_mappings)?,
         priority: row.priority,
+        weight: row.weight,
+        auto_weight_enabled: row.auto_weight_enabled == 1,
         enabled: row.enabled == 1,
         extra_headers: parse_json_map(&row.extra_headers)?,
         timeout_seconds: row.timeout_seconds,
         created_at: row.created_at.clone(),
         updated_at: row.updated_at.clone(),
-        backoff_remaining_seconds: backoff_remaining,
-    })
-}
-
-fn row_to_upstream_detail_out(
-    row: &UpstreamRow,
-    backoff_remaining: Option<i64>,
-) -> Result<UpstreamDetailOut, AppError> {
-    Ok(UpstreamDetailOut {
-        id: row.id,
-        name: row.name.clone(),
-        base_url: row.base_url.clone(),
-        api_key: row.api_key.clone(),
-        api_key_set: row.api_key.is_some(),
-        model_names: parse_json_array(&row.model_names)?,
-        model_prefixes: parse_json_array(&row.model_prefixes)?,
-        model_mappings: parse_json_map(&row.model_mappings)?,
-        priority: row.priority,
-        enabled: row.enabled == 1,
-        extra_headers: parse_json_map(&row.extra_headers)?,
-        timeout_seconds: row.timeout_seconds,
-        created_at: row.created_at.clone(),
-        updated_at: row.updated_at.clone(),
-        backoff_remaining_seconds: backoff_remaining,
+        runtime_health_score: 100,
+        effective_weight: row.weight as f64,
+        health_recovery_remaining_seconds: None,
     })
 }
 
@@ -69,7 +45,7 @@ pub async fn list_upstreams(pool: &SqlitePool) -> Result<Vec<UpstreamOut>, AppEr
             .fetch_all(pool)
             .await?;
 
-    rows.iter().map(|r| row_to_upstream_out(r, None)).collect()
+    rows.iter().map(row_to_upstream_out).collect()
 }
 
 pub async fn list_enabled_upstreams(pool: &SqlitePool) -> Result<Vec<UpstreamRow>, AppError> {
@@ -109,6 +85,7 @@ pub async fn create_upstream(
 ) -> Result<UpstreamOut, AppError> {
     let timeout = input.timeout_seconds.unwrap_or(default_timeout);
     let enabled: i64 = if input.enabled { 1 } else { 0 };
+    let auto_weight_enabled: i64 = if input.auto_weight_enabled { 1 } else { 0 };
 
     let model_names = serde_json::to_string(&input.model_names)?;
     let model_prefixes = serde_json::to_string(&input.model_prefixes)?;
@@ -118,9 +95,9 @@ pub async fn create_upstream(
     let result = sqlx::query(
         r#"INSERT INTO upstreams
             (name, base_url, api_key, model_names, model_prefixes, model_mappings,
-             priority, enabled, extra_headers, timeout_seconds,
+             priority, weight, auto_weight_enabled, enabled, extra_headers, timeout_seconds,
              created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))"#,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))"#,
     )
     .bind(&input.name)
     .bind(&input.base_url)
@@ -129,6 +106,8 @@ pub async fn create_upstream(
     .bind(&model_prefixes)
     .bind(&model_mappings)
     .bind(input.priority)
+    .bind(input.weight)
+    .bind(auto_weight_enabled)
     .bind(enabled)
     .bind(&extra_headers)
     .bind(timeout)
@@ -141,7 +120,7 @@ pub async fn create_upstream(
         .fetch_one(pool)
         .await?;
 
-    row_to_upstream_out(&row, None)
+    row_to_upstream_out(&row)
 }
 
 pub async fn update_upstream(
@@ -170,6 +149,7 @@ pub async fn update_upstream(
         .timeout_seconds
         .unwrap_or(existing.timeout_seconds);
     let enabled: i64 = if input.base.enabled { 1 } else { 0 };
+    let auto_weight_enabled: i64 = if input.base.auto_weight_enabled { 1 } else { 0 };
 
     let model_names = serde_json::to_string(&input.base.model_names)?;
     let model_prefixes = serde_json::to_string(&input.base.model_prefixes)?;
@@ -180,7 +160,7 @@ pub async fn update_upstream(
         r#"UPDATE upstreams
         SET name = ?, base_url = ?, api_key = ?,
             model_names = ?, model_prefixes = ?, model_mappings = ?,
-            priority = ?, enabled = ?, extra_headers = ?,
+            priority = ?, weight = ?, auto_weight_enabled = ?, enabled = ?, extra_headers = ?,
             timeout_seconds = ?, updated_at = datetime('now')
         WHERE id = ?"#,
     )
@@ -191,6 +171,8 @@ pub async fn update_upstream(
     .bind(&model_prefixes)
     .bind(&model_mappings)
     .bind(input.base.priority)
+    .bind(input.base.weight)
+    .bind(auto_weight_enabled)
     .bind(enabled)
     .bind(&extra_headers)
     .bind(timeout)
@@ -203,7 +185,7 @@ pub async fn update_upstream(
         .fetch_one(pool)
         .await?;
 
-    row_to_upstream_out(&row, None)
+    row_to_upstream_out(&row)
 }
 
 pub async fn set_upstream_enabled(
@@ -224,7 +206,7 @@ pub async fn set_upstream_enabled(
         .fetch_one(pool)
         .await?;
 
-    row_to_upstream_out(&row, None)
+    row_to_upstream_out(&row)
 }
 
 pub async fn set_upstream_priority(
@@ -243,7 +225,7 @@ pub async fn set_upstream_priority(
         .fetch_one(pool)
         .await?;
 
-    row_to_upstream_out(&row, None)
+    row_to_upstream_out(&row)
 }
 
 pub async fn delete_upstream(pool: &SqlitePool, id: i64) -> Result<bool, AppError> {

@@ -92,6 +92,23 @@ pub struct TokenUsageStatsOut {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogTopItemOut {
+    pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogTopStatsOut {
+    pub window: String,
+    /// Model ranking by request count. Kept as `models` for API compatibility.
+    pub models: Vec<RequestLogTopItemOut>,
+    /// Channel ranking by request count. Kept as `channels` for API compatibility.
+    pub channels: Vec<RequestLogTopItemOut>,
+    pub model_tokens: Vec<RequestLogTopItemOut>,
+    pub channel_tokens: Vec<RequestLogTopItemOut>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyError {
     pub error: HashMap<String, String>,
 }

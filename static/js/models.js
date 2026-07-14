@@ -1,52 +1,154 @@
 // Model selection plus application authentication and initial loading.
+const FORM_MODEL_PREVIEW_LIMIT = 6;
+
+function getFormModels() {
+  return uniqueList(splitList(fields.modelNames.value));
+}
+
+function renderFormModelSelection() {
+  const models = getFormModels();
+  modelSelectionCount.textContent = models.length ? `${models.length} 个` : "未选择";
+  modelSelectionPreview.innerHTML = "";
+
+  if (models.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "model-selection-empty";
+    empty.textContent = "未配置精确模型";
+    modelSelectionPreview.append(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const model of models.slice(0, FORM_MODEL_PREVIEW_LIMIT)) {
+    const chip = document.createElement("span");
+    chip.className = "model-selection-chip";
+    chip.title = model;
+
+    const name = document.createElement("span");
+    name.className = "model-selection-chip-name";
+    name.textContent = model;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "model-selection-remove";
+    remove.dataset.model = model;
+    remove.setAttribute("aria-label", `移除模型 ${model}`);
+    remove.title = `移除 ${model}`;
+    remove.textContent = "×";
+
+    chip.append(name, remove);
+    fragment.append(chip);
+  }
+
+  const hiddenCount = models.length - FORM_MODEL_PREVIEW_LIMIT;
+  if (hiddenCount > 0) {
+    const more = document.createElement("span");
+    more.className = "model-selection-more";
+    more.textContent = `+${hiddenCount}`;
+    more.title = `还有 ${hiddenCount} 个模型`;
+    fragment.append(more);
+  }
+  modelSelectionPreview.append(fragment);
+}
+
+function setFormModels(models) {
+  fields.modelNames.value = joinList(uniqueList(models));
+  renderFormModelSelection();
+}
+
+function openFormModelManager() {
+  const selectedModels = getFormModels();
+  const formName = fields.name.value.trim() || "当前渠道";
+  openModelDialog(
+    { name: formName, model_names: selectedModels },
+    selectedModels,
+    selectedModels,
+    "form",
+  );
+}
+
 function getVisibleDialogModels() {
   const filter = modelFilter.value.trim().toLowerCase();
-  if (!filter) {
-    return modelDialogState.models;
+  return modelDialogState.models.filter((model) => {
+    if (modelSelectedOnly.checked && !modelDialogState.selected.has(model)) {
+      return false;
+    }
+    return !filter || model.toLowerCase().includes(filter);
+  });
+}
+
+function renderModelDialogSummary() {
+  const parts = [`已选择 ${modelDialogState.selected.size}`];
+  if (modelDialogState.catalogLoaded) {
+    parts.push(`上游返回 ${modelDialogState.available.size}`);
+    const unavailableCount = [...modelDialogState.selected]
+      .filter((model) => !modelDialogState.available.has(model)).length;
+    if (unavailableCount > 0) {
+      parts.push(`${unavailableCount} 个未由上游返回`);
+    }
+  } else {
+    parts.push(`列表 ${modelDialogState.models.length}`);
   }
-  return modelDialogState.models.filter((model) => model.toLowerCase().includes(filter));
+  modelDialogSummary.textContent = parts.join(" · ");
 }
 
 function renderModelOptions() {
   const visibleModels = getVisibleDialogModels();
   modelOptions.innerHTML = "";
-  modelDialogSummary.textContent = `已选择 ${modelDialogState.selected.size} / ${modelDialogState.models.length}`;
+  renderModelDialogSummary();
 
   if (visibleModels.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "没有匹配的模型。";
+    empty.textContent = modelSelectedOnly.checked ? "尚未选择匹配的模型。" : "没有匹配的模型。";
     modelOptions.append(empty);
     return;
   }
 
   const fragment = document.createDocumentFragment();
   for (const model of visibleModels) {
+    const selected = modelDialogState.selected.has(model);
+    const unavailable = modelDialogState.catalogLoaded && !modelDialogState.available.has(model);
     const label = document.createElement("label");
     label.className = "model-option";
+    label.classList.toggle("is-selected", selected);
+    label.classList.toggle("is-unavailable", unavailable);
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.dataset.model = model;
-    checkbox.checked = modelDialogState.selected.has(model);
+    checkbox.checked = selected;
 
     const text = document.createElement("span");
+    text.className = "model-option-name";
     text.textContent = model;
 
     label.append(checkbox, text);
+    if (unavailable) {
+      const state = document.createElement("span");
+      state.className = "model-option-state";
+      state.textContent = "未返回";
+      label.append(state);
+    }
     fragment.append(label);
   }
   modelOptions.append(fragment);
 }
 
-function openModelDialog(upstream, models, selectedNames, mode) {
+function openModelDialog(upstream, models, selectedNames, mode, options = {}) {
+  const fetchedModels = uniqueList(models);
   const currentSelection = uniqueList(selectedNames || upstream.model_names);
   modelDialogState.upstream = upstream;
   modelDialogState.mode = mode;
-  modelDialogState.models = uniqueList([...models, ...currentSelection]);
+  modelDialogState.models = uniqueList([...fetchedModels, ...currentSelection]);
   modelDialogState.selected = new Set(currentSelection);
+  modelDialogState.available = new Set(fetchedModels);
+  modelDialogState.catalogLoaded = options.catalogLoaded === true;
   modelDialogTitle.textContent = `选择模型：${upstream.name}`;
   modelFilter.value = "";
+  modelSelectedOnly.checked = false;
+  modelManualInput.value = "";
+  modelManualEntry.open = false;
   renderModelOptions();
   if (typeof modelDialog.showModal === "function") {
     modelDialog.showModal();
@@ -73,7 +175,7 @@ async function fetchModelsForUpstream(upstream, mode, button, selectedNames) {
   setStatus(`正在拉取 ${upstream.name} 的模型...`);
   try {
     const result = await api(`/api/admin/upstreams/${upstream.id}/models`, { method: "POST" });
-    openModelDialog(upstream, result.models, selectedNames, mode);
+    openModelDialog(upstream, result.models, selectedNames, mode, { catalogLoaded: true });
     setStatus(`已拉取 ${result.models.length} 个模型。`, "ok");
   } catch (error) {
     setStatus(`拉取模型失败：${error.message}`, "error");
@@ -101,7 +203,7 @@ async function fetchModelsFromForm() {
   }
 
   const draftUpstream = { name: fields.name.value.trim() || baseUrl, model_names: [] };
-  const selectedNames = splitList(fields.modelNames.value);
+  const selectedNames = getFormModels();
   const enteredApiKey = fields.apiKey.value.trim();
   const previewApiKey = fields.clearApiKey.checked
     ? null
@@ -120,7 +222,7 @@ async function fetchModelsFromForm() {
         timeout_seconds: Number(fields.timeoutSeconds.value || 300),
       }),
     });
-    openModelDialog(draftUpstream, result.models, selectedNames, "form");
+    openModelDialog(draftUpstream, result.models, selectedNames, "form", { catalogLoaded: true });
     setStatus(`已拉取 ${result.models.length} 个模型。`, "ok");
   } catch (error) {
     setStatus(`拉取模型失败：${error.message}`, "error");
@@ -128,6 +230,23 @@ async function fetchModelsFromForm() {
     fetchModelsButton.disabled = false;
     fetchModelsButton.textContent = originalText;
   }
+}
+
+function addManualModels() {
+  const additions = uniqueList(splitList(modelManualInput.value));
+  if (additions.length === 0) {
+    modelManualInput.focus();
+    return;
+  }
+
+  modelDialogState.models = uniqueList([...modelDialogState.models, ...additions]);
+  for (const model of additions) {
+    modelDialogState.selected.add(model);
+  }
+  modelManualInput.value = "";
+  modelFilter.value = "";
+  renderModelOptions();
+  modelManualInput.focus();
 }
 
 async function saveModelSelection() {
@@ -139,7 +258,7 @@ async function saveModelSelection() {
 
   const selectedModels = modelDialogState.models.filter((model) => modelDialogState.selected.has(model));
   if (modelDialogState.mode === "form") {
-    fields.modelNames.value = joinList(selectedModels);
+    setFormModels(selectedModels);
     closeModelDialog();
     setStatus(`已选择 ${selectedModels.length} 个模型，保存渠道后生效。`, "ok");
     return;
@@ -159,6 +278,8 @@ async function saveModelSelection() {
         model_prefixes: upstream.model_prefixes,
         model_mappings: upstream.model_mappings || {},
         priority: upstream.priority,
+        weight: upstream.weight,
+        auto_weight_enabled: upstream.auto_weight_enabled,
         timeout_seconds: upstream.timeout_seconds,
         enabled: upstream.enabled,
         extra_headers: upstream.extra_headers || {},
@@ -166,7 +287,7 @@ async function saveModelSelection() {
       }),
     });
     if (fields.id.value === String(upstream.id)) {
-      fields.modelNames.value = joinList(selectedModels);
+      setFormModels(selectedModels);
     }
     closeModelDialog();
     await loadUpstreams();
@@ -240,6 +361,8 @@ async function handleUpstreamAction(button) {
           model_prefixes: detail.model_prefixes || [],
           model_mappings: detail.model_mappings || {},
           priority: detail.priority,
+          weight: detail.weight,
+          auto_weight_enabled: detail.auto_weight_enabled,
           timeout_seconds: detail.timeout_seconds,
           enabled: detail.enabled,
           extra_headers: detail.extra_headers || {},
@@ -542,7 +665,7 @@ quickImportFillButton.addEventListener("click", async () => {
   if (apiKey) {
     fields.apiKey.value = apiKey;
   }
-  fields.modelNames.value = joinList(models);
+  setFormModels(models);
   fields.priority.value = QUICK_IMPORT_DEFAULT_PRIORITY;
   closeQuickImportDialog();
   openUpstreamDialog();
@@ -568,7 +691,15 @@ fetchModelsButton.addEventListener("click", async () => {
   await fetchModelsFromForm();
 });
 
+manageModelsButton.addEventListener("click", openFormModelManager);
+modelSelectionPreview.addEventListener("click", (event) => {
+  const removeButton = event.target.closest("button[data-model]");
+  if (!removeButton) return;
+  setFormModels(getFormModels().filter((model) => model !== removeButton.dataset.model));
+});
+
 modelFilter.addEventListener("input", renderModelOptions);
+modelSelectedOnly.addEventListener("change", renderModelOptions);
 modelOptions.addEventListener("change", (event) => {
   const checkbox = event.target.closest("input[type='checkbox'][data-model]");
   if (!checkbox) return;
@@ -577,7 +708,15 @@ modelOptions.addEventListener("change", (event) => {
   } else {
     modelDialogState.selected.delete(checkbox.dataset.model);
   }
-  renderModelOptions();
+  const option = checkbox.closest(".model-option");
+  option?.classList.toggle("is-selected", checkbox.checked);
+  renderModelDialogSummary();
+  if (modelSelectedOnly.checked && !checkbox.checked) {
+    option?.remove();
+    if (!modelOptions.querySelector(".model-option")) {
+      renderModelOptions();
+    }
+  }
 });
 modelSelectAllButton.addEventListener("click", () => {
   for (const model of getVisibleDialogModels()) {
@@ -591,10 +730,18 @@ modelClearAllButton.addEventListener("click", () => {
   }
   renderModelOptions();
 });
+modelAddManualButton.addEventListener("click", addManualModels);
+modelManualInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    addManualModels();
+  }
+});
 modelSaveSelectionButton.addEventListener("click", saveModelSelection);
 modelCancelSelectionButton.addEventListener("click", closeModelDialog);
 modelDialogClose.addEventListener("click", closeModelDialog);
 dismissOnBackdropClick(modelDialog, closeModelDialog);
+renderFormModelSelection();
 
 for (const link of navLinks) {
   link.addEventListener("click", () => switchView(link.dataset.view));
@@ -613,6 +760,12 @@ if (logSearchInput) {
 }
 if (logStatusFilter) {
   logStatusFilter.addEventListener("change", () => {
+    resetLogPagination();
+    loadLogs();
+  });
+}
+if (logClientFilter) {
+  logClientFilter.addEventListener("change", () => {
     resetLogPagination();
     loadLogs();
   });

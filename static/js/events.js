@@ -64,6 +64,7 @@ settingsDefaultHome?.addEventListener("change", () => {
   try { localStorage.setItem(DEFAULT_HOME_KEY, settingsDefaultHome.value); } catch { /* ignore */ }
 });
 serverSettingsForm?.addEventListener("submit", saveServerSettings);
+routingSettingsForm?.addEventListener("submit", saveRoutingSettings);
 newModelTestTemplateButton?.addEventListener("click", () => openModelTestTemplateDialog());
 modelTestTemplateList?.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-model-template-action]");
@@ -154,6 +155,21 @@ rotateAdminTokenButton?.addEventListener("click", rotateAdminToken);
 // ── Dashboard controls ───────────────────────────────────
 if (dashboardRefreshButton) {
   dashboardRefreshButton.addEventListener("click", () => {
+    loadDashboardData();
+  });
+}
+if (dashboardTopWindowSelect) {
+  dashboardTopWindowSelect.addEventListener("change", () => {
+    const nextWindow = DASHBOARD_TOP_WINDOW_VALUES.has(dashboardTopWindowSelect.value)
+      ? dashboardTopWindowSelect.value
+      : "today";
+    dashboardTopWindow = nextWindow;
+    dashboardTopWindowSelect.value = nextWindow;
+    try {
+      localStorage.setItem(DASHBOARD_TOP_WINDOW_KEY, nextWindow);
+    } catch {
+      // Ignore storage failures; the selection still applies to the current page.
+    }
     loadDashboardData();
   });
 }

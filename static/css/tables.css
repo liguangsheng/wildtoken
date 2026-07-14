@@ -444,6 +444,30 @@ td.no-match-state {
   min-width: 80px;
 }
 
+.col-weight {
+  min-width: 126px;
+}
+
+.weight-stack {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.weight-stack strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.weight-stack span {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .col-reasoning {
   min-width: 92px;
 }
@@ -742,7 +766,7 @@ td.no-match-state {
   50% { box-shadow: 0 0 0 4px rgb(52 211 153 / 18%); opacity: 0.85; }
 }
 
-.backoff-note {
+.effective-zero-note {
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
   border-radius: var(--radius-sm);
@@ -756,7 +780,7 @@ td.no-match-state {
   white-space: nowrap;
 }
 
-.backoff-note[hidden] {
+.effective-zero-note[hidden] {
   display: none;
 }
 

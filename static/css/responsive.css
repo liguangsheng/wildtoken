@@ -276,6 +276,18 @@
     gap: 10px;
   }
 
+  .upstream-modal-head,
+  .model-dialog-panel > .modal-head {
+    align-items: start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .upstream-modal-head > div,
+  .model-dialog-panel > .modal-head > div {
+    min-width: 0;
+  }
+
   .modal-head h2 {
     font-size: 18px;
   }
@@ -289,6 +301,16 @@
   .toggle-list,
   .request-detail-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-picker,
+  .model-manual-entry-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-picker > button,
+  .model-manual-entry-body > button {
+    width: 100%;
   }
 
   .field,
@@ -342,6 +364,10 @@
     gap: 8px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .model-selected-toggle {
+    grid-column: 1 / -1;
   }
 
   .model-toolbar-actions button {

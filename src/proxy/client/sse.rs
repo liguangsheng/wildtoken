@@ -3,7 +3,10 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 use axum::body::Bytes;
 use futures::{Stream, StreamExt};
 
-use super::super::{logging, matcher::BackoffManager};
+use super::super::{
+    logging,
+    matcher::{AutoWeightManager, AutoWeightPolicy},
+};
 use crate::state::RuntimeMetrics;
 
 type UpstreamByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
@@ -419,7 +422,9 @@ pub(super) struct SseStreamState {
     pub(super) log_body_max_bytes: usize,
     pub(super) log_entry: Option<logging::LogEntry>,
     pub(super) log_writer: logging::LogWriter,
-    pub(super) backoff: Arc<BackoffManager>,
+    pub(super) auto_weight: Arc<AutoWeightManager>,
+    pub(super) auto_weight_policy: AutoWeightPolicy,
+    pub(super) auto_weight_enabled: bool,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) upstream_id: i64,
 }
@@ -434,7 +439,9 @@ impl SseStreamState {
         log_body_max_bytes: usize,
         log_entry: logging::LogEntry,
         log_writer: logging::LogWriter,
-        backoff: Arc<BackoffManager>,
+        auto_weight: Arc<AutoWeightManager>,
+        auto_weight_policy: AutoWeightPolicy,
+        auto_weight_enabled: bool,
         metrics: Arc<RuntimeMetrics>,
         upstream_id: i64,
     ) -> Self {
@@ -449,7 +456,9 @@ impl SseStreamState {
             log_body_max_bytes,
             log_entry: Some(log_entry),
             log_writer,
-            backoff,
+            auto_weight,
+            auto_weight_policy,
+            auto_weight_enabled,
             metrics,
             upstream_id,
         }
@@ -466,9 +475,17 @@ impl SseStreamState {
 
     fn record_response_health(&self) {
         if (200..300).contains(&self.upstream_status) {
-            self.backoff.record_success(self.upstream_id);
+            self.auto_weight.record_success(
+                self.upstream_id,
+                self.auto_weight_enabled,
+                self.auto_weight_policy,
+            );
         } else {
-            self.backoff.record_failure(self.upstream_id);
+            self.auto_weight.record_failure(
+                self.upstream_id,
+                self.auto_weight_enabled,
+                self.auto_weight_policy,
+            );
         }
     }
 
@@ -509,7 +526,11 @@ impl SseStreamState {
     }
 
     pub(super) fn finish_upstream_error(&mut self, error: String) {
-        self.backoff.record_failure(self.upstream_id);
+        self.auto_weight.record_failure(
+            self.upstream_id,
+            self.auto_weight_enabled,
+            self.auto_weight_policy,
+        );
         if self.finish_log(502, Some(error)) {
             self.metrics.record_sse_upstream_error();
         }
@@ -523,7 +544,6 @@ impl Drop for SseStreamState {
             if self.observation.terminal_event_seen {
                 self.finish_complete();
             } else {
-                self.record_response_health();
                 if self.finish_log(
                     499,
                     Some("client disconnected before the SSE response completed".to_string()),

@@ -69,6 +69,12 @@ pub struct DownstreamAuthRejection {
 }
 
 fn detect_client_type(parts: &Parts, anthropic: bool) -> String {
+    let originator = parts
+        .headers
+        .get("originator")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let user_agent = parts
         .headers
         .get(axum::http::header::USER_AGENT)
@@ -76,9 +82,17 @@ fn detect_client_type(parts: &Parts, anthropic: bool) -> String {
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    if user_agent.contains("opencode") {
+    if originator.contains("codex desktop") {
+        "codex-desktop".into()
+    } else if originator.contains("codex-tui") {
+        "codex-tui".into()
+    } else if user_agent.contains("codex desktop") {
+        "codex-desktop".into()
+    } else if user_agent.contains("codex-tui") {
+        "codex-tui".into()
+    } else if user_agent.contains("opencode") {
         "opencode".into()
-    } else if user_agent.contains("codex") {
+    } else if originator.contains("codex") || user_agent.contains("codex") {
         "codex".into()
     } else if anthropic
         || user_agent.contains("claude")
@@ -174,5 +188,52 @@ impl FromRequestParts<AppState> for DownstreamAuth {
             token_name,
             client_type: detect_client_type(parts, anthropic),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Request;
+
+    use super::detect_client_type;
+
+    fn request_parts(headers: &[(&str, &str)]) -> axum::http::request::Parts {
+        let mut request = Request::builder().uri("/v1/responses");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(()).unwrap().into_parts().0
+    }
+
+    #[test]
+    fn distinguishes_codex_tui_and_desktop_with_originator_precedence() {
+        let tui = request_parts(&[
+            ("originator", "codex-tui"),
+            ("user-agent", "Codex Desktop/0.144.2"),
+        ]);
+        assert_eq!(detect_client_type(&tui, false), "codex-tui");
+
+        let desktop = request_parts(&[
+            ("originator", "Codex Desktop"),
+            ("user-agent", "codex-tui/0.144.3"),
+        ]);
+        assert_eq!(detect_client_type(&desktop, false), "codex-desktop");
+    }
+
+    #[test]
+    fn falls_back_to_user_agent_and_preserves_other_client_types() {
+        for (user_agent, expected) in [
+            ("codex-tui/0.144.3", "codex-tui"),
+            ("Codex Desktop/0.144.2", "codex-desktop"),
+            ("codex-cli/0.1", "codex"),
+            ("opencode/1.0", "opencode"),
+            ("claude-cli/1.0", "claude"),
+        ] {
+            let parts = request_parts(&[("user-agent", user_agent)]);
+            assert_eq!(detect_client_type(&parts, false), expected);
+        }
+
+        assert_eq!(detect_client_type(&request_parts(&[]), true), "claude");
+        assert_eq!(detect_client_type(&request_parts(&[]), false), "unknown");
     }
 }

@@ -375,6 +375,13 @@ pub struct LogQuery {
     upstream_id: Option<i64>,
     search: Option<String>,
     status: Option<String>,
+    client_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LogTopQuery {
+    window: Option<String>,
+    limit: Option<i64>,
 }
 
 fn default_limit() -> i32 {
@@ -402,6 +409,11 @@ pub async fn admin_list_logs(
         .status
         .as_deref()
         .filter(|status| matches!(*status, "2xx" | "4xx" | "5xx" | "none"));
+    let client_type = query
+        .client_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let mut items = log_db::list_logs(
         &state.db,
         limit + 1,
@@ -411,6 +423,7 @@ pub async fn admin_list_logs(
         query.upstream_id,
         search,
         status,
+        client_type,
     )
     .await?;
     let has_more = items.len() as i32 > limit;
@@ -439,6 +452,25 @@ pub async fn admin_token_usage_stats(
     _auth: AdminAuth,
 ) -> Result<Json<TokenUsageStatsOut>, AppError> {
     Ok(Json(state.log_stats.snapshot().token_usage))
+}
+
+pub async fn admin_top_log_stats(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(query): Query<LogTopQuery>,
+) -> Result<Json<crate::models::request_log::RequestLogTopStatsOut>, AppError> {
+    let window_value = query
+        .window
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("today");
+    let window = log_db::LogTopWindow::from_query_value(window_value).ok_or_else(|| {
+        AppError::BadRequest("window must be one of: today, 1d, 3d, 7d, 30d".into())
+    })?;
+    let limit = query.limit.unwrap_or(10).clamp(1, 20);
+
+    Ok(Json(log_db::top_log_stats(&state.db, window, limit).await?))
 }
 
 pub async fn admin_get_log_detail(

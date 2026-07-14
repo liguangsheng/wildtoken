@@ -8,7 +8,7 @@ use crate::{
         settings::{AdminCredential, RuntimeSettings},
         upstream::UpstreamRow,
     },
-    proxy::matcher::BackoffManager,
+    proxy::matcher::{AutoWeightManager, AutoWeightPolicy},
     state::{init_db, AdminAuthCache, AppState, RuntimeMetrics},
 };
 use axum::{
@@ -36,6 +36,8 @@ fn upstream_with_headers(path_base: String, extra_headers: serde_json::Value) ->
         model_prefixes: "[]".into(),
         model_mappings: "{}".into(),
         priority: 100,
+        weight: 100,
+        auto_weight_enabled: 1,
         enabled: 1,
         extra_headers: extra_headers.to_string(),
         timeout_seconds: 30.0,
@@ -63,7 +65,7 @@ async fn test_state() -> AppState {
         db,
         http_client: reqwest::Client::new(),
         settings: Settings::default(),
-        backoff: Arc::new(BackoffManager::new()),
+        auto_weight: Arc::new(AutoWeightManager::new()),
         runtime_settings: Arc::new(RwLock::new(RuntimeSettings::default())),
         admin_credential: Arc::new(RwLock::new(AdminCredential {
             credential_hash: "test".into(),
@@ -279,7 +281,7 @@ async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
 
     let result = proxy_request(
         &state,
-        &state.backoff,
+        AutoWeightPolicy::from(&RuntimeSettings::default()),
         &upstream,
         1,
         "test-token",
@@ -359,7 +361,7 @@ async fn authentication_and_payment_responses_do_not_disable_the_channel() {
 
         let result = proxy_request(
             &state,
-            &state.backoff,
+            AutoWeightPolicy::from(&RuntimeSettings::default()),
             &upstream,
             1,
             "test-token",
@@ -381,8 +383,19 @@ async fn authentication_and_payment_responses_do_not_disable_the_channel() {
             .await
             .unwrap();
         assert_eq!(enabled, 1, "status {status} must not disable the channel");
-        assert!(state.backoff.is_backed_off(upstream.id));
-        state.backoff.record_success(upstream.id);
+        assert_eq!(
+            state
+                .auto_weight
+                .snapshot(
+                    upstream.id,
+                    upstream.weight,
+                    true,
+                    AutoWeightPolicy::from(&RuntimeSettings::default()),
+                )
+                .score,
+            80
+        );
+        state.auto_weight.reset(upstream.id);
     }
 
     server.abort();

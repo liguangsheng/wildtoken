@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::config::Settings;
 use crate::error::AppError;
-use crate::proxy::matcher::BackoffManager;
+use crate::proxy::matcher::AutoWeightManager;
 use crate::{
     db::settings as settings_db,
     models::settings::{AdminCredential, RuntimeSettings},
@@ -320,7 +320,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub http_client: reqwest::Client,
     pub settings: Settings,
-    pub backoff: Arc<BackoffManager>,
+    pub auto_weight: Arc<AutoWeightManager>,
     pub runtime_settings: Arc<RwLock<RuntimeSettings>>,
     /// Current Argon2id credential snapshot. It is published only after a DB commit.
     pub admin_credential: Arc<RwLock<AdminCredential>>,
@@ -391,6 +391,27 @@ impl AppState {
     }
 }
 
+async fn ensure_column(
+    pool: &SqlitePool,
+    table: &'static str,
+    column: &'static str,
+    definition: &'static str,
+) -> Result<(), sqlx::Error> {
+    let query = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?");
+    let exists: i64 = sqlx::query_scalar(&query)
+        .bind(column)
+        .fetch_one(pool)
+        .await?;
+    if exists == 0 {
+        sqlx::query(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Create the current database schema, seed defaults, and enable SQLite runtime settings.
 pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("PRAGMA journal_mode=WAL;")
@@ -411,6 +432,8 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             model_prefixes  TEXT NOT NULL DEFAULT '[]',
             model_mappings  TEXT NOT NULL DEFAULT '{}',
             priority        INTEGER NOT NULL DEFAULT 100,
+            weight          INTEGER NOT NULL DEFAULT 100 CHECK (weight BETWEEN 0 AND 10000),
+            auto_weight_enabled INTEGER NOT NULL DEFAULT 1 CHECK (auto_weight_enabled IN (0, 1)),
             enabled         INTEGER NOT NULL DEFAULT 1,
             extra_headers   TEXT NOT NULL DEFAULT '{}',
             timeout_seconds REAL NOT NULL DEFAULT 300.0,
@@ -420,6 +443,20 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "#,
     )
     .execute(pool)
+    .await?;
+    ensure_column(
+        pool,
+        "upstreams",
+        "weight",
+        "INTEGER NOT NULL DEFAULT 100 CHECK (weight BETWEEN 0 AND 10000)",
+    )
+    .await?;
+    ensure_column(
+        pool,
+        "upstreams",
+        "auto_weight_enabled",
+        "INTEGER NOT NULL DEFAULT 1 CHECK (auto_weight_enabled IN (0, 1))",
+    )
     .await?;
 
     sqlx::query(r#"CREATE TABLE IF NOT EXISTS model_test_prompt_templates (
@@ -555,12 +592,46 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             log_body_keep_count INTEGER NOT NULL CHECK (log_body_keep_count BETWEEN 1 AND 10000),
             log_retention_days INTEGER NOT NULL CHECK (log_retention_days BETWEEN 1 AND 3650),
             log_body_max_bytes INTEGER NOT NULL CHECK (log_body_max_bytes BETWEEN 0 AND 1048576),
+            max_retries INTEGER NOT NULL DEFAULT 1 CHECK (max_retries BETWEEN 0 AND 5),
+            same_upstream_retry_interval_ms INTEGER NOT NULL DEFAULT 1000 CHECK (same_upstream_retry_interval_ms BETWEEN 0 AND 60000),
+            auto_weight_failure_penalty INTEGER NOT NULL DEFAULT 20 CHECK (auto_weight_failure_penalty BETWEEN 0 AND 100),
+            auto_weight_success_increment INTEGER NOT NULL DEFAULT 5 CHECK (auto_weight_success_increment BETWEEN 0 AND 100),
+            auto_weight_recovery_increment INTEGER NOT NULL DEFAULT 10 CHECK (auto_weight_recovery_increment BETWEEN 0 AND 100),
+            auto_weight_recovery_interval_seconds INTEGER NOT NULL DEFAULT 60 CHECK (auto_weight_recovery_interval_seconds BETWEEN 1 AND 3600),
             revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );"#,
     )
     .execute(pool)
     .await?;
+    for (column, definition) in [
+        (
+            "max_retries",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (max_retries BETWEEN 0 AND 5)",
+        ),
+        (
+            "same_upstream_retry_interval_ms",
+            "INTEGER NOT NULL DEFAULT 1000 CHECK (same_upstream_retry_interval_ms BETWEEN 0 AND 60000)",
+        ),
+        (
+            "auto_weight_failure_penalty",
+            "INTEGER NOT NULL DEFAULT 20 CHECK (auto_weight_failure_penalty BETWEEN 0 AND 100)",
+        ),
+        (
+            "auto_weight_success_increment",
+            "INTEGER NOT NULL DEFAULT 5 CHECK (auto_weight_success_increment BETWEEN 0 AND 100)",
+        ),
+        (
+            "auto_weight_recovery_increment",
+            "INTEGER NOT NULL DEFAULT 10 CHECK (auto_weight_recovery_increment BETWEEN 0 AND 100)",
+        ),
+        (
+            "auto_weight_recovery_interval_seconds",
+            "INTEGER NOT NULL DEFAULT 60 CHECK (auto_weight_recovery_interval_seconds BETWEEN 1 AND 3600)",
+        ),
+    ] {
+        ensure_column(pool, "runtime_settings", column, definition).await?;
+    }
     sqlx::query(
         "INSERT INTO runtime_settings (id, log_body_keep_count, log_retention_days, log_body_max_bytes, revision) VALUES (1, 100, 30, 200000, 1) ON CONFLICT(id) DO NOTHING",
     )

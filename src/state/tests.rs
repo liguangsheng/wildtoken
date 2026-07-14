@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use crate::{
     config::Settings,
     models::settings::{AdminCredential, RuntimeSettings},
-    proxy::matcher::BackoffManager,
+    proxy::matcher::AutoWeightManager,
 };
 
 use super::{hash_admin_token, init_db, AdminAuthCache, AppState, RuntimeMetrics};
@@ -38,7 +38,7 @@ fn state_with_credential(credential: AdminCredential) -> AppState {
         db,
         http_client: reqwest::Client::new(),
         settings: Settings::default(),
-        backoff: Arc::new(BackoffManager::new()),
+        auto_weight: Arc::new(AutoWeightManager::new()),
         runtime_settings: Arc::new(RwLock::new(RuntimeSettings::default())),
         admin_credential_version: Arc::new(AtomicI64::new(credential.credential_version)),
         admin_credential: Arc::new(RwLock::new(credential)),
@@ -67,6 +67,70 @@ async fn initialization_does_not_overwrite_existing_runtime_settings() {
             .await
             .unwrap();
     assert_eq!(row, (42, 7));
+}
+
+#[tokio::test]
+async fn initialization_migrates_legacy_routing_columns_with_current_defaults() {
+    let pool = test_pool().await;
+    sqlx::query(
+        r#"CREATE TABLE upstreams (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            base_url TEXT NOT NULL,
+            api_key TEXT,
+            model_names TEXT NOT NULL DEFAULT '[]',
+            model_prefixes TEXT NOT NULL DEFAULT '[]',
+            model_mappings TEXT NOT NULL DEFAULT '{}',
+            priority INTEGER NOT NULL DEFAULT 100,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            extra_headers TEXT NOT NULL DEFAULT '{}',
+            timeout_seconds REAL NOT NULL DEFAULT 300.0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO upstreams (name, base_url) VALUES ('legacy', 'https://example.test')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"CREATE TABLE runtime_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            log_body_keep_count INTEGER NOT NULL,
+            log_retention_days INTEGER NOT NULL,
+            log_body_max_bytes INTEGER NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_settings (id, log_body_keep_count, log_retention_days, log_body_max_bytes) VALUES (1, 42, 30, 200000)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    init_db(&pool).await.unwrap();
+
+    let upstream: (i64, i64) =
+        sqlx::query_as("SELECT weight, auto_weight_enabled FROM upstreams WHERE name = 'legacy'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(upstream, (100, 1));
+    let routing: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT max_retries, same_upstream_retry_interval_ms, auto_weight_failure_penalty, auto_weight_success_increment, auto_weight_recovery_increment, auto_weight_recovery_interval_seconds FROM runtime_settings WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(routing, (1, 1_000, 20, 5, 10, 60));
 }
 
 #[tokio::test]

@@ -15,11 +15,13 @@ use crate::middleware::auth::AdminAuth;
 use crate::models::request_log::{ModelFetchIn, ModelListOut, TestRequest};
 use crate::models::settings::ModelTestRequest;
 use crate::models::upstream::{
-    UpstreamDetailOut, UpstreamEnabledIn, UpstreamIn, UpstreamPriorityIn, UpstreamUpdate,
+    UpstreamDetailOut, UpstreamEnabledIn, UpstreamIn, UpstreamOut, UpstreamPriorityIn,
+    UpstreamUpdate,
 };
 use crate::proxy::client::{
     apply_header_overrides, is_sensitive_header_name, validate_header_overrides,
 };
+use crate::proxy::matcher::AutoWeightPolicy;
 use crate::state::AppState;
 
 // ── URL helper (aligned with Python build_upstream_url) ───────────────────────
@@ -37,6 +39,15 @@ fn build_url(base_url: &str, path: &str, query: &str) -> String {
     } else {
         format!("{target}?{query}")
     }
+}
+
+fn apply_runtime_health(state: &AppState, policy: AutoWeightPolicy, item: &mut UpstreamOut) {
+    let health = state
+        .auto_weight
+        .snapshot(item.id, item.weight, item.auto_weight_enabled, policy);
+    item.runtime_health_score = health.score;
+    item.effective_weight = health.effective_weight;
+    item.health_recovery_remaining_seconds = health.recovery_remaining_seconds;
 }
 
 fn extract_model_test_reply(payload: &serde_json::Value) -> Option<String> {
@@ -221,8 +232,10 @@ pub async fn admin_list_upstreams(
     _auth: AdminAuth,
 ) -> Result<Json<Vec<crate::models::upstream::UpstreamOut>>, AppError> {
     let mut items = upstream_db::list_upstreams(&state.db).await?;
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    let policy = AutoWeightPolicy::from(&runtime_settings);
     for item in &mut items {
-        item.backoff_remaining_seconds = state.backoff.backoff_remaining_seconds(item.id);
+        apply_runtime_health(&state, policy, item);
     }
     Ok(Json(items))
 }
@@ -236,7 +249,13 @@ pub async fn admin_get_upstream(
         .await?
         .ok_or_else(|| AppError::NotFound("upstream not found".into()))?;
 
-    let backoff = state.backoff.backoff_remaining_seconds(row.id);
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    let health = state.auto_weight.snapshot(
+        row.id,
+        row.weight,
+        row.auto_weight_enabled == 1,
+        AutoWeightPolicy::from(&runtime_settings),
+    );
     let model_names: Vec<String> = serde_json::from_str(&row.model_names).unwrap_or_default();
     let model_prefixes: Vec<String> = serde_json::from_str(&row.model_prefixes).unwrap_or_default();
     let model_mappings: HashMap<String, String> =
@@ -254,12 +273,16 @@ pub async fn admin_get_upstream(
         model_prefixes,
         model_mappings,
         priority: row.priority,
+        weight: row.weight,
+        auto_weight_enabled: row.auto_weight_enabled == 1,
         enabled: row.enabled == 1,
         extra_headers,
         timeout_seconds: row.timeout_seconds,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        backoff_remaining_seconds: backoff,
+        runtime_health_score: health.score,
+        effective_weight: health.effective_weight,
+        health_recovery_remaining_seconds: health.recovery_remaining_seconds,
     }))
 }
 
@@ -268,6 +291,9 @@ pub async fn admin_create_upstream(
     _auth: AdminAuth,
     Json(input): Json<UpstreamIn>,
 ) -> Result<Response, AppError> {
+    input
+        .validate()
+        .map_err(|error| AppError::BadRequest(error.into()))?;
     validate_overrides(&input.extra_headers)?;
     match upstream_db::create_upstream(
         &state.db,
@@ -276,7 +302,11 @@ pub async fn admin_create_upstream(
     )
     .await
     {
-        Ok(out) => Ok((StatusCode::CREATED, Json(out)).into_response()),
+        Ok(mut out) => {
+            let runtime_settings = state.runtime_settings.read().await.clone();
+            apply_runtime_health(&state, AutoWeightPolicy::from(&runtime_settings), &mut out);
+            Ok((StatusCode::CREATED, Json(out)).into_response())
+        }
         Err(AppError::Database(e)) if e.to_string().contains("UNIQUE") => {
             Err(AppError::BadRequest("upstream name already exists".into()))
         }
@@ -290,17 +320,28 @@ pub async fn admin_update_upstream(
     Path(id): Path<i64>,
     Json(input): Json<UpstreamUpdate>,
 ) -> Result<Json<crate::models::upstream::UpstreamOut>, AppError> {
+    input
+        .base
+        .validate()
+        .map_err(|error| AppError::BadRequest(error.into()))?;
     validate_overrides(&input.base.extra_headers)?;
-    if upstream_db::get_upstream(&state.db, id).await?.is_none() {
+    let Some(existing) = upstream_db::get_upstream(&state.db, id).await? else {
         return Err(AppError::NotFound("upstream not found".into()));
-    }
-    let out = upstream_db::update_upstream(
+    };
+    let mut out = upstream_db::update_upstream(
         &state.db,
         id,
         &input,
         state.settings.upstream.default_timeout_seconds,
     )
     .await?;
+    if existing.auto_weight_enabled != i64::from(input.base.auto_weight_enabled)
+        || (existing.enabled == 0 && input.base.enabled)
+    {
+        state.auto_weight.reset(id);
+    }
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    apply_runtime_health(&state, AutoWeightPolicy::from(&runtime_settings), &mut out);
     Ok(Json(out))
 }
 
@@ -313,7 +354,12 @@ pub async fn admin_set_upstream_enabled(
     if upstream_db::get_upstream(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound("upstream not found".into()));
     }
-    let out = upstream_db::set_upstream_enabled(&state.db, id, body.enabled).await?;
+    let mut out = upstream_db::set_upstream_enabled(&state.db, id, body.enabled).await?;
+    if body.enabled {
+        state.auto_weight.reset(id);
+    }
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    apply_runtime_health(&state, AutoWeightPolicy::from(&runtime_settings), &mut out);
     Ok(Json(out))
 }
 
@@ -326,7 +372,9 @@ pub async fn admin_set_upstream_priority(
     if upstream_db::get_upstream(&state.db, id).await?.is_none() {
         return Err(AppError::NotFound("upstream not found".into()));
     }
-    let out = upstream_db::set_upstream_priority(&state.db, id, body.priority).await?;
+    let mut out = upstream_db::set_upstream_priority(&state.db, id, body.priority).await?;
+    let runtime_settings = state.runtime_settings.read().await.clone();
+    apply_runtime_health(&state, AutoWeightPolicy::from(&runtime_settings), &mut out);
     Ok(Json(out))
 }
 
@@ -337,6 +385,7 @@ pub async fn admin_delete_upstream(
 ) -> Result<StatusCode, AppError> {
     let deleted = upstream_db::delete_upstream(&state.db, id).await?;
     if deleted {
+        state.auto_weight.reset(id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::NotFound("upstream not found".into()))
