@@ -239,7 +239,7 @@ pub async fn proxy_request(
                 upstream_request: Some(upstream_snap),
                 ..Default::default()
             };
-            logging::schedule_log(&state.db, state.runtime_metrics.clone(), log_entry);
+            logging::schedule_log(&state.log_writer, log_entry);
 
             return Err(AppError::UpstreamError(err_msg));
         }
@@ -288,7 +288,7 @@ pub async fn proxy_request(
             resp_headers.clone(),
             log_body_max_bytes,
             log_entry,
-            state.db.clone(),
+            state.log_writer.clone(),
             Arc::clone(backoff),
             state.runtime_metrics.clone(),
             upstream.id,
@@ -349,7 +349,7 @@ pub async fn proxy_request(
                 upstream_request: Some(upstream_snap),
                 ..Default::default()
             };
-            logging::schedule_log(&state.db, state.runtime_metrics.clone(), log_entry);
+            logging::schedule_log(&state.log_writer, log_entry);
             return Err(AppError::UpstreamError(e.to_string()));
         }
     };
@@ -412,7 +412,7 @@ pub async fn proxy_request(
         downstream_response: Some(upstream_resp_snap),
         ..Default::default()
     };
-    logging::schedule_log(&state.db, state.runtime_metrics.clone(), log_entry);
+    logging::schedule_log(&state.log_writer, log_entry);
 
     Ok(ProxyResponse {
         status,

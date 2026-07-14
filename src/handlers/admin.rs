@@ -279,6 +279,10 @@ fn runtime_metrics_out(state: &AppState) -> RuntimeMetricsOut {
         sse_client_disconnects_total: metrics.sse_client_disconnects_total,
         sse_recent_disconnects_10m: metrics.sse_recent_disconnects_10m,
         sse_upstream_errors_total: metrics.sse_upstream_errors_total,
+        log_queue_depth: metrics.log_queue_depth,
+        log_written_total: metrics.log_written_total,
+        log_write_batches_total: metrics.log_write_batches_total,
+        log_dropped_total: metrics.log_dropped_total,
         log_write_failures_total: metrics.log_write_failures_total,
         slow_db_operations_total: metrics.slow_db_operations_total,
         cleanup: RuntimeCleanupMetricsOut {

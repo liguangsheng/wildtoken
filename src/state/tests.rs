@@ -28,8 +28,11 @@ async fn test_pool() -> SqlitePool {
 }
 
 fn state_with_credential(credential: AdminCredential) -> AppState {
+    let db = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let runtime_metrics = Arc::new(RuntimeMetrics::new());
+    let log_writer = crate::proxy::logging::spawn_log_writer(db.clone(), runtime_metrics.clone());
     AppState {
-        db: SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+        db,
         http_client: reqwest::Client::new(),
         settings: Settings::default(),
         backoff: Arc::new(BackoffManager::new()),
@@ -37,7 +40,8 @@ fn state_with_credential(credential: AdminCredential) -> AppState {
         admin_credential_version: Arc::new(AtomicI64::new(credential.credential_version)),
         admin_credential: Arc::new(RwLock::new(credential)),
         admin_auth_cache: Arc::new(AdminAuthCache::new()),
-        runtime_metrics: Arc::new(RuntimeMetrics::new()),
+        runtime_metrics,
+        log_writer,
         started_at: Instant::now(),
     }
 }

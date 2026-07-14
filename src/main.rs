@@ -55,6 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     // 5. Create shared state
+    let runtime_metrics = Arc::new(RuntimeMetrics::new());
+    let log_writer = proxy::logging::spawn_log_writer(db.clone(), runtime_metrics.clone());
     let state = AppState {
         db: db.clone(),
         http_client,
@@ -64,7 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admin_credential_version: Arc::new(AtomicI64::new(admin_credential.credential_version)),
         admin_credential: Arc::new(tokio::sync::RwLock::new(admin_credential)),
         admin_auth_cache: Arc::new(AdminAuthCache::new()),
-        runtime_metrics: Arc::new(RuntimeMetrics::new()),
+        runtime_metrics,
+        log_writer,
         started_at: std::time::Instant::now(),
     };
 

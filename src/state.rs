@@ -245,6 +245,10 @@ pub struct RuntimeMetricsSnapshot {
     pub sse_client_disconnects_total: u64,
     pub sse_recent_disconnects_10m: u64,
     pub sse_upstream_errors_total: u64,
+    pub log_queue_depth: u64,
+    pub log_written_total: u64,
+    pub log_write_batches_total: u64,
+    pub log_dropped_total: u64,
     pub log_write_failures_total: u64,
     pub slow_db_operations_total: u64,
     pub cleanup_active: bool,
@@ -265,6 +269,10 @@ pub struct RuntimeMetrics {
     sse_completed_total: AtomicU64,
     sse_client_disconnects_total: AtomicU64,
     sse_upstream_errors_total: AtomicU64,
+    log_queue_depth: AtomicU64,
+    log_written_total: AtomicU64,
+    log_write_batches_total: AtomicU64,
+    log_dropped_total: AtomicU64,
     log_write_failures_total: AtomicU64,
     slow_db_operations_total: AtomicU64,
     cleanup_active: AtomicBool,
@@ -288,6 +296,10 @@ impl RuntimeMetrics {
             sse_completed_total: AtomicU64::new(0),
             sse_client_disconnects_total: AtomicU64::new(0),
             sse_upstream_errors_total: AtomicU64::new(0),
+            log_queue_depth: AtomicU64::new(0),
+            log_written_total: AtomicU64::new(0),
+            log_write_batches_total: AtomicU64::new(0),
+            log_dropped_total: AtomicU64::new(0),
             log_write_failures_total: AtomicU64::new(0),
             slow_db_operations_total: AtomicU64::new(0),
             cleanup_active: AtomicBool::new(false),
@@ -337,9 +349,33 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_log_write_failure(&self) {
+    pub fn record_log_enqueue(&self) {
+        self.log_queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_log_dequeue(&self, count: u64) {
+        let _ = self
+            .log_queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_sub(count))
+            });
+    }
+
+    pub fn record_log_written(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.log_written_total.fetch_add(count, Ordering::Relaxed);
+        self.log_write_batches_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_log_drop(&self) {
+        self.log_dropped_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_log_write_failure_count(&self, count: u64) {
         self.log_write_failures_total
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     pub fn record_slow_db_operation(&self) {
@@ -400,6 +436,10 @@ impl RuntimeMetrics {
             sse_client_disconnects_total: self.sse_client_disconnects_total.load(Ordering::Relaxed),
             sse_recent_disconnects_10m: recent_disconnects,
             sse_upstream_errors_total: self.sse_upstream_errors_total.load(Ordering::Relaxed),
+            log_queue_depth: self.log_queue_depth.load(Ordering::Relaxed),
+            log_written_total: self.log_written_total.load(Ordering::Relaxed),
+            log_write_batches_total: self.log_write_batches_total.load(Ordering::Relaxed),
+            log_dropped_total: self.log_dropped_total.load(Ordering::Relaxed),
             log_write_failures_total: self.log_write_failures_total.load(Ordering::Relaxed),
             slow_db_operations_total: self.slow_db_operations_total.load(Ordering::Relaxed),
             cleanup_active: self.cleanup_active.load(Ordering::Relaxed),
@@ -482,6 +522,7 @@ pub struct AppState {
     pub admin_credential_version: Arc<AtomicI64>,
     pub(crate) admin_auth_cache: Arc<AdminAuthCache>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
+    pub log_writer: crate::proxy::logging::LogWriter,
     pub started_at: Instant,
 }
 

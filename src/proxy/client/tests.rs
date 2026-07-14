@@ -233,8 +233,10 @@ async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
         .await
         .unwrap();
     init_db(&db).await.unwrap();
+    let runtime_metrics = Arc::new(RuntimeMetrics::new());
+    let log_writer = crate::proxy::logging::spawn_log_writer(db.clone(), runtime_metrics.clone());
     let state = AppState {
-        db,
+        db: db.clone(),
         http_client: reqwest::Client::new(),
         settings: Settings::default(),
         backoff: Arc::new(BackoffManager::new()),
@@ -245,7 +247,8 @@ async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
         })),
         admin_credential_version: Arc::new(AtomicI64::new(1)),
         admin_auth_cache: Arc::new(AdminAuthCache::new()),
-        runtime_metrics: Arc::new(RuntimeMetrics::new()),
+        runtime_metrics,
+        log_writer,
         started_at: Instant::now(),
     };
     let upstream = upstream_with_headers(

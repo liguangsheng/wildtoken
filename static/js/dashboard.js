@@ -235,6 +235,8 @@ function renderDashboard() {
   const cleanup = metrics.cleanup || {};
   const activeSse = Number(metrics.active_sse_streams || 0);
   const recentDisconnects = Number(metrics.sse_recent_disconnects_10m || 0);
+  const logQueueDepth = Number(metrics.log_queue_depth || 0);
+  const logDropped = Number(metrics.log_dropped_total || 0);
   const logWriteFailures = Number(metrics.log_write_failures_total || 0);
   const slowDbOperations = Number(metrics.slow_db_operations_total || 0);
   renderDashboardKpiCards(dashboardRuntimeKpis, [
@@ -251,10 +253,10 @@ function renderDashboard() {
       tone: recentDisconnects > 0 ? "tone-warn" : "",
     },
     {
-      value: formatCompactNumber(logWriteFailures),
-      label: "日志写失败",
-      hint: `慢 DB ${formatCompactNumber(slowDbOperations)}`,
-      tone: logWriteFailures > 0 || slowDbOperations > 0 ? "tone-danger" : "",
+      value: formatCompactNumber(logQueueDepth),
+      label: "日志队列",
+      hint: `失败 ${formatCompactNumber(logWriteFailures)} · 丢弃 ${formatCompactNumber(logDropped)} · 慢 DB ${formatCompactNumber(slowDbOperations)}`,
+      tone: logWriteFailures > 0 || logDropped > 0 || slowDbOperations > 0 ? "tone-danger" : "",
     },
     {
       value: cleanup.active ? "运行中" : "空闲",

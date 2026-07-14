@@ -418,7 +418,7 @@ pub(super) struct SseStreamState {
     pub(super) response_headers: HashMap<String, String>,
     pub(super) log_body_max_bytes: usize,
     pub(super) log_entry: Option<logging::LogEntry>,
-    pub(super) pool: sqlx::SqlitePool,
+    pub(super) log_writer: logging::LogWriter,
     pub(super) backoff: Arc<BackoffManager>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) upstream_id: i64,
@@ -434,7 +434,7 @@ impl SseStreamState {
         response_headers: HashMap<String, String>,
         log_body_max_bytes: usize,
         log_entry: logging::LogEntry,
-        pool: sqlx::SqlitePool,
+        log_writer: logging::LogWriter,
         backoff: Arc<BackoffManager>,
         metrics: Arc<RuntimeMetrics>,
         upstream_id: i64,
@@ -450,7 +450,7 @@ impl SseStreamState {
             response_headers,
             log_body_max_bytes,
             log_entry: Some(log_entry),
-            pool,
+            log_writer,
             backoff,
             metrics,
             upstream_id,
@@ -500,7 +500,7 @@ impl SseStreamState {
         entry.error = error;
         entry.upstream_response = Some(response_snapshot.clone());
         entry.downstream_response = Some(response_snapshot);
-        logging::schedule_log(&self.pool, self.metrics.clone(), entry);
+        logging::schedule_log(&self.log_writer, entry);
         true
     }
 
