@@ -239,6 +239,7 @@ async fn anthropic_channel_overrides_reach_the_upstream_on_the_wire() {
         db.clone(),
         runtime_metrics.clone(),
         log_stats.clone(),
+        Settings::default().logging.log_queue_capacity,
     );
     let state = AppState {
         db: db.clone(),

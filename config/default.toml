@@ -4,6 +4,14 @@ port = 3100
 
 [database]
 url = "sqlite:wildtoken.db?mode=rwc"
+max_connections = 3
+sqlite_cache_size_kib = 2048
+sqlite_statement_cache_capacity = 32
+sqlite_mmap_size_bytes = 0
+idle_timeout_seconds = 60
+
+[logging]
+log_queue_capacity = 512
 
 [upstream]
 default_timeout_seconds = 300.0

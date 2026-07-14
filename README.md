@@ -35,12 +35,20 @@ port = 3100
 
 [database]
 url = "sqlite:wildtoken.db?mode=rwc"
+max_connections = 3
+sqlite_cache_size_kib = 2048
+sqlite_statement_cache_capacity = 32
+sqlite_mmap_size_bytes = 0
+idle_timeout_seconds = 60
+
+[logging]
+log_queue_capacity = 512
 ```
 
 也可以用环境变量覆盖，例如：
 
 ```bash
-APP__SERVER__PORT=3100 DATABASE_URL='sqlite:wildtoken.db?mode=rwc' cargo run
+TOKIO_WORKER_THREADS=4 APP__SERVER__PORT=3100 APP__DATABASE__MAX_CONNECTIONS=3 APP__LOGGING__LOG_QUEUE_CAPACITY=512 DATABASE_URL='sqlite:wildtoken.db?mode=rwc' cargo run
 ```
 
 为兼容旧配置，`.env` 里的 `ADMIN_TOKEN`、`DATABASE_URL` 也会被读取。

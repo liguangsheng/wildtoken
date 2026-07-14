@@ -35,6 +35,7 @@ fn state_with_credential(credential: AdminCredential) -> AppState {
         db.clone(),
         runtime_metrics.clone(),
         log_stats.clone(),
+        Settings::default().logging.log_queue_capacity,
     );
     AppState {
         db,

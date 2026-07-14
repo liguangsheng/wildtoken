@@ -11,8 +11,10 @@ use axum::{
     routing::{any, get, patch, post},
     Router,
 };
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -39,7 +41,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = settings.database.url.clone();
 
     // 3. Setup database
-    let db = sqlx::SqlitePool::connect(&database_url).await?;
+    let max_connections = settings.database.max_connections.max(1);
+    let sqlite_cache_size_kib = settings.database.sqlite_cache_size_kib.max(256);
+    let sqlite_statement_cache_capacity = settings.database.sqlite_statement_cache_capacity;
+    let sqlite_mmap_size_bytes = settings.database.sqlite_mmap_size_bytes.max(0);
+    let db_connect_options = database_url
+        .parse::<SqliteConnectOptions>()?
+        .statement_cache_capacity(sqlite_statement_cache_capacity)
+        .pragma("foreign_keys", "ON")
+        .pragma("cache_size", format!("-{sqlite_cache_size_kib}"))
+        .pragma("mmap_size", sqlite_mmap_size_bytes.to_string());
+    let db = SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .idle_timeout(Duration::from_secs(settings.database.idle_timeout_seconds))
+        .connect_with(db_connect_options)
+        .await?;
     init_db(&db).await?;
     let runtime_settings = load_runtime_settings(&db).await;
     let admin_credential = bootstrap_admin_credential(&db, settings.admin.token.clone()).await?;
@@ -57,8 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 5. Create shared state
     let runtime_metrics = Arc::new(RuntimeMetrics::new());
     let log_stats = Arc::new(db::log_stats::LogStatsCache::load(&db).await?);
-    let log_writer =
-        proxy::logging::spawn_log_writer(db.clone(), runtime_metrics.clone(), log_stats.clone());
+    let log_writer = proxy::logging::spawn_log_writer(
+        db.clone(),
+        runtime_metrics.clone(),
+        log_stats.clone(),
+        settings.logging.log_queue_capacity,
+    );
     let state = AppState {
         db: db.clone(),
         http_client,

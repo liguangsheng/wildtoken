@@ -9,7 +9,6 @@ use crate::state::RuntimeMetrics;
 const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
 const LOG_WRITE_MAX_ATTEMPTS: usize = 5;
 const LOG_WRITE_RETRY_BASE_DELAY_MS: u64 = 50;
-const LOG_QUEUE_CAPACITY: usize = 4096;
 const LOG_WRITE_BATCH_SIZE: usize = 20;
 const LOG_WRITE_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 const CLEANUP_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(120);
@@ -445,7 +444,7 @@ mod tests {
 
         let metrics = Arc::new(RuntimeMetrics::new());
         let log_stats = Arc::new(crate::db::log_stats::LogStatsCache::empty());
-        let writer = spawn_log_writer(pool.clone(), metrics.clone(), log_stats.clone());
+        let writer = spawn_log_writer(pool.clone(), metrics.clone(), log_stats.clone(), 16);
         for path in ["/v1/responses", "/v1/chat/completions"] {
             schedule_log(
                 &writer,
@@ -556,8 +555,9 @@ pub fn spawn_log_writer(
     pool: sqlx::SqlitePool,
     metrics: Arc<RuntimeMetrics>,
     log_stats: Arc<LogStatsCache>,
+    queue_capacity: usize,
 ) -> LogWriter {
-    let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
+    let (sender, receiver) = mpsc::channel(queue_capacity.max(1));
     tokio::spawn(log_writer_loop(pool, metrics.clone(), log_stats, receiver));
     LogWriter { sender, metrics }
 }

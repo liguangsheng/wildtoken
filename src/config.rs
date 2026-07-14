@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub struct Settings {
     pub server: ServerSettings,
     pub database: DatabaseSettings,
+    pub logging: LoggingSettings,
     pub upstream: UpstreamSettings,
     pub admin: AdminSettings,
 }
@@ -21,6 +22,17 @@ pub struct ServerSettings {
 #[serde(default)]
 pub struct DatabaseSettings {
     pub url: String,
+    pub max_connections: u32,
+    pub sqlite_cache_size_kib: i64,
+    pub sqlite_statement_cache_capacity: usize,
+    pub sqlite_mmap_size_bytes: i64,
+    pub idle_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LoggingSettings {
+    pub log_queue_capacity: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -40,6 +52,7 @@ impl Default for Settings {
         Self {
             server: ServerSettings::default(),
             database: DatabaseSettings::default(),
+            logging: LoggingSettings::default(),
             upstream: UpstreamSettings::default(),
             admin: AdminSettings::default(),
         }
@@ -59,6 +72,19 @@ impl Default for DatabaseSettings {
     fn default() -> Self {
         Self {
             url: "sqlite:wildtoken.db?mode=rwc".into(),
+            max_connections: 3,
+            sqlite_cache_size_kib: 2048,
+            sqlite_statement_cache_capacity: 32,
+            sqlite_mmap_size_bytes: 0,
+            idle_timeout_seconds: 60,
+        }
+    }
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        Self {
+            log_queue_capacity: 512,
         }
     }
 }
