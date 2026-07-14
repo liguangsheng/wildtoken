@@ -225,7 +225,7 @@ function clearTokenFilters() {
 function clearLogFilters() {
   if (logSearchInput) logSearchInput.value = "";
   if (logStatusFilter) logStatusFilter.value = "";
-  logOffset = 0;
+  resetLogPagination();
   loadLogs();
 }
 

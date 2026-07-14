@@ -614,18 +614,18 @@ for (const link of navLinks) {
 window.addEventListener("hashchange", () => switchView(currentViewFromHash()));
 
 logUpstreamFilter.addEventListener("change", () => {
-  logOffset = 0;
+  resetLogPagination();
   loadLogs();
 });
 if (logSearchInput) {
   logSearchInput.addEventListener("input", debounce(() => {
-    logOffset = 0;
+    resetLogPagination();
     loadLogs();
   }, 150));
 }
 if (logStatusFilter) {
   logStatusFilter.addEventListener("change", () => {
-    logOffset = 0;
+    resetLogPagination();
     loadLogs();
   });
 }
@@ -642,10 +642,17 @@ logRefreshButton.addEventListener("click", async () => {
   }
 });
 logPrevButton.addEventListener("click", () => {
+  if (logCursorStack.length === 0) return;
+  logCurrentCursor = logCursorStack.pop() || null;
+  logNextCursor = null;
   logOffset = Math.max(0, logOffset - LOG_PAGE_SIZE);
   loadLogs();
 });
 logNextButton.addEventListener("click", () => {
+  if (!logHasMore || !logNextCursor) return;
+  logCursorStack.push(logCurrentCursor);
+  logCurrentCursor = logNextCursor;
+  logNextCursor = null;
   logOffset += LOG_PAGE_SIZE;
   loadLogs();
 });

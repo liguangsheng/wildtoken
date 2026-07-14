@@ -131,6 +131,38 @@ function updateLogRpm(recentRpm) {
   }
 }
 
+function normalizeLogCursor(cursor) {
+  if (!cursor || typeof cursor.created_at !== "string") {
+    return null;
+  }
+  const id = Number(cursor.id);
+  if (!Number.isFinite(id) || id < 1) {
+    return null;
+  }
+  return {
+    created_at: cursor.created_at,
+    id,
+  };
+}
+
+function resetLogPagination() {
+  logOffset = 0;
+  logHasMore = false;
+  logCursorStack = [];
+  logCurrentCursor = null;
+  logNextCursor = null;
+}
+
+function appendLogPaginationParams(params) {
+  const cursor = normalizeLogCursor(logCurrentCursor);
+  if (cursor) {
+    params.set("before_created_at", cursor.created_at);
+    params.set("before_id", String(cursor.id));
+  } else {
+    params.set("offset", String(logOffset));
+  }
+}
+
 function formatStatusBadge(statusCode) {
   if (statusCode === null || statusCode === undefined) {
     return '<span class="muted">无响应</span>';
@@ -637,15 +669,17 @@ async function loadLogs() {
     const filtersActive = Boolean(upstreamId || search || status);
     const params = new URLSearchParams({
       limit: String(LOG_PAGE_SIZE),
-      offset: String(logOffset),
     });
+    appendLogPaginationParams(params);
     if (upstreamId) params.set("upstream_id", upstreamId);
     if (search) params.set("search", search);
     if (status) params.set("status", status);
 
     const page = await api(`/api/admin/logs?${params}`);
     const items = page.items || [];
-    logHasMore = page.has_more;
+    logHasMore = Boolean(page.has_more);
+    logNextCursor = normalizeLogCursor(page.next_cursor)
+      || (logHasMore && items.length > 0 ? normalizeLogCursor(items[items.length - 1]) : null);
     logsLoadedOnce = true;
     renderLogRows(items, {
       noMatch: filtersActive && items.length === 0,
@@ -653,12 +687,12 @@ async function loadLogs() {
       emptyCopy: filtersActive ? "全库中没有符合当前筛选条件的日志。" : "暂无代理请求记录。",
     });
     const loaded = items.length;
-    const pageNo = Math.floor(logOffset / LOG_PAGE_SIZE) + 1;
+    const pageNo = logCursorStack.length + 1;
     updateLogRpm(page.recent_rpm);
     logStatusBox.textContent = `${filtersActive ? "全库筛选" : "服务端分页"} · 已加载 ${loaded} 条 · 第 ${pageNo} 页 · 自动刷新 5s`;
     logStatusBox.dataset.tone = "neutral";
-    logPrevButton.disabled = logOffset === 0;
-    logNextButton.disabled = !logHasMore;
+    logPrevButton.disabled = logCursorStack.length === 0;
+    logNextButton.disabled = !logHasMore || !logNextCursor;
     renderUpstreamSummary();
   } catch (error) {
     updateLogRpm(null);

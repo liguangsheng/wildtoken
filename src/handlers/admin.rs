@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::db::{log as log_db, settings as settings_db, token as token_db};
 use crate::error::AppError;
 use crate::middleware::auth::AdminAuth;
-use crate::models::request_log::{RequestLogPage, TokenUsageStatsOut};
+use crate::models::request_log::{RequestLogCursorOut, RequestLogPage, TokenUsageStatsOut};
 use crate::models::settings::{
     AdminTokenRotateIn, AdminTokenRotateOut, ModelTestPromptTemplate, ModelTestPromptTemplateIn,
     ModelTestTemplate, ModelTestTemplateIn, RuntimeCleanupMetricsOut, RuntimeLogSettingsSummary,
@@ -376,6 +376,8 @@ pub struct LogQuery {
     limit: i32,
     #[serde(default)]
     offset: i32,
+    before_created_at: Option<String>,
+    before_id: Option<i64>,
     upstream_id: Option<i64>,
     search: Option<String>,
     status: Option<String>,
@@ -392,6 +394,11 @@ pub async fn admin_list_logs(
 ) -> Result<Json<RequestLogPage>, AppError> {
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
+    let before_created_at = query
+        .before_created_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let search = query
         .search
         .as_deref()
@@ -405,6 +412,8 @@ pub async fn admin_list_logs(
         &state.db,
         limit + 1,
         offset,
+        before_created_at,
+        query.before_id,
         query.upstream_id,
         search,
         status,
@@ -414,11 +423,20 @@ pub async fn admin_list_logs(
     if has_more {
         items.truncate(limit as usize);
     }
+    let next_cursor = if has_more {
+        items.last().map(|item| RequestLogCursorOut {
+            created_at: item.created_at.clone(),
+            id: item.id,
+        })
+    } else {
+        None
+    };
     let recent_rpm = state.log_stats.snapshot().recent_one_minute_log_count;
     Ok(Json(RequestLogPage {
         items,
         has_more,
         recent_rpm,
+        next_cursor,
     }))
 }
 

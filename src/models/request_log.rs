@@ -60,10 +60,18 @@ pub struct RequestLogDetailOut {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestLogCursorOut {
+    pub created_at: String,
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestLogPage {
     pub items: Vec<RequestLogOut>,
     pub has_more: bool,
     pub recent_rpm: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<RequestLogCursorOut>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

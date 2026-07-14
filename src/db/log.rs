@@ -123,6 +123,8 @@ pub async fn list_logs(
     pool: &SqlitePool,
     limit: i32,
     offset: i32,
+    before_created_at: Option<&str>,
+    before_id: Option<i64>,
     upstream_id: Option<i64>,
     search: Option<&str>,
     status: Option<&str>,
@@ -140,11 +142,21 @@ pub async fn list_logs(
     );
 
     push_log_filters(&mut query, upstream_id, search, status);
+    if let (Some(before_created_at), Some(before_id)) = (before_created_at, before_id) {
+        query.push(" AND (created_at < ");
+        query.push_bind(before_created_at);
+        query.push(" OR (created_at = ");
+        query.push_bind(before_created_at);
+        query.push(" AND id < ");
+        query.push_bind(before_id);
+        query.push("))");
+    }
     query
-        .push(" ORDER BY created_at DESC LIMIT ")
-        .push_bind(limit)
-        .push(" OFFSET ")
-        .push_bind(offset);
+        .push(" ORDER BY created_at DESC, id DESC LIMIT ")
+        .push_bind(limit);
+    if before_created_at.is_none() || before_id.is_none() {
+        query.push(" OFFSET ").push_bind(offset);
+    }
     let rows: Vec<LogListRow> = query.build_query_as().fetch_all(pool).await?;
 
     let outputs: Vec<RequestLogOut> = rows
@@ -552,11 +564,52 @@ mod tests {
         .await
         .unwrap();
 
-        let items = list_logs(&pool, 10, 0, Some(1), None, Some("2xx"))
+        let items = list_logs(&pool, 10, 0, None, None, Some(1), None, Some("2xx"))
             .await
             .unwrap();
 
         assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), [1, 3]);
+    }
+
+    #[tokio::test]
+    async fn list_uses_created_at_and_id_cursor_for_stable_pagination() {
+        let pool = test_pool().await;
+        sqlx::query(
+            r#"INSERT INTO request_logs (id, created_at) VALUES
+               (1, '2026-01-01 00:00:00'),
+               (2, '2026-01-01 00:00:01'),
+               (3, '2026-01-01 00:00:01'),
+               (4, '2026-01-01 00:00:02')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let first_page = list_logs(&pool, 2, 0, None, None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first_page.iter().map(|item| item.id).collect::<Vec<_>>(),
+            [4, 3]
+        );
+
+        let cursor = first_page.last().unwrap();
+        let second_page = list_logs(
+            &pool,
+            2,
+            0,
+            Some(&cursor.created_at),
+            Some(cursor.id),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second_page.iter().map(|item| item.id).collect::<Vec<_>>(),
+            [2, 1]
+        );
     }
 
     #[tokio::test]
