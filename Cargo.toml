@@ -1,6 +1,6 @@
 [package]
 name = "wildtoken"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -54,6 +54,12 @@ flate2 = "1"
 
 # Async utilities
 futures = "0.3"
+
+# Windows system tray (not pulled in on Linux/macOS)
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.19"
+tao = "0.30"
+open = "5"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
