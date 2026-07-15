@@ -129,8 +129,8 @@ pub fn run() {
     let mut server_thread = Some(server_thread);
     let admin_url_for_loop = admin_url.clone();
 
-    event_loop.run(move |event, event_loop| {
-        event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.run(move |event, _event_loop, control_flow| {
+        *control_flow = ControlFlow::Wait;
 
         match event {
             Event::NewEvents(StartCause::Init) => {
@@ -149,7 +149,7 @@ pub fn run() {
                     let _ = tx.send(());
                 }
                 tray_icon.take();
-                event_loop.exit();
+                *control_flow = ControlFlow::Exit;
             }
             Event::LoopDestroyed => {
                 if let Some(tx) = shutdown_tx.take() {

@@ -57,6 +57,25 @@ jobs:
             node --check "$file"
           done < <(find static/js -type f -name '*.js' -print0 | sort -z)
 
+  windows-check:
+    name: Windows compile check
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Check Windows target
+        run: cargo check --locked --target x86_64-pc-windows-msvc
+
   docker-smoke:
     name: Docker smoke test
     needs: checks
