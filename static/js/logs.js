@@ -11,6 +11,43 @@ function renderLogFilterOptions() {
   logUpstreamFilter.value = selected;
 }
 
+/** Plain-text channel label; prefer upstream_id, fall back to name. */
+function formatLogChannelLabel(log) {
+  const id = log?.upstream_id;
+  const name = (log?.upstream_name || "").trim();
+  if (id !== null && id !== undefined) {
+    return name ? `#${id} · ${name}` : `#${id}`;
+  }
+  return name || "未匹配到渠道";
+}
+
+/** List-cell channel stack: id primary, name secondary. */
+function formatLogChannelStack(log) {
+  const id = log?.upstream_id;
+  const name = (log?.upstream_name || "").trim();
+  if (id === null || id === undefined) {
+    if (name) {
+      return `
+        <div class="channel-stack">
+          <strong title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+          <span class="muted">无 ID</span>
+        </div>
+      `;
+    }
+    return "<span class=\"muted\">无（未匹配到渠道）</span>";
+  }
+  const title = name ? `#${id} · ${name}` : `#${id}`;
+  const nameLine = name
+    ? `<span class="muted" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`
+    : "<span class=\"muted\">无名称</span>";
+  return `
+    <div class="channel-stack">
+      <strong title="${escapeHtml(title)}">#${id}</strong>
+      ${nameLine}
+    </div>
+  `;
+}
+
 function formatTokens(log) {
   const part = (value) => (value === null || value === undefined ? "-" : value);
   return `
@@ -270,14 +307,7 @@ function renderLogRows(items, options = {}) {
     row.tabIndex = 0;
     row.title = log.error || "点击查看请求详情";
     const time = formatLogTimestamp(log.created_at);
-    const channel = log.upstream_name
-      ? `
-        <div class="channel-stack">
-          <strong title="${escapeHtml(log.upstream_name)}">${escapeHtml(log.upstream_name)}</strong>
-          <span class="muted">#${log.upstream_id}</span>
-        </div>
-      `
-      : "<span class=\"muted\">无（未匹配到渠道）</span>";
+    const channel = formatLogChannelStack(log);
     const status = formatStatusBadge(log.status_code);
     const throughput = formatThroughput(log);
     row.innerHTML = `
@@ -481,10 +511,7 @@ function extractLogDetailError(detail) {
 }
 
 function formatLogDetailMeta(detail) {
-  const channelName = detail.upstream_name || "未匹配到渠道";
-  const channel = detail.upstream_id === null || detail.upstream_id === undefined
-    ? channelName
-    : `#${detail.upstream_id} · ${channelName}`;
+  const channel = formatLogChannelLabel(detail);
   const statusText = detail.status_code === null || detail.status_code === undefined
     ? "无响应"
     : `HTTP ${detail.status_code}`;
@@ -660,7 +687,7 @@ async function showLogDetail(logId) {
     const detail = await api(`/api/admin/logs/${logId}`);
     currentLogDetail = detail;
     const time = formatLogTimestamp(detail.created_at);
-    const channel = detail.upstream_name || "未匹配到渠道";
+    const channel = formatLogChannelLabel(detail);
     const status = detail.status_code === null ? "无响应" : `HTTP ${detail.status_code}`;
     logDetailTitle.textContent = "请求详情";
     logDetailSummary.textContent = `#${detail.id} · ${time} · ${channel} · ${detail.model || "-"} · ${status}`;
