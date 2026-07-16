@@ -126,22 +126,71 @@ fn usage_i32(value: Option<&serde_json::Value>) -> Option<i32> {
         .map(|value| value as i32)
 }
 
+fn sum_token_parts(parts: &[Option<i32>]) -> Option<i32> {
+    let mut sum = 0i32;
+    let mut any = false;
+    for part in parts {
+        if let Some(value) = *part {
+            any = true;
+            sum = sum.saturating_add(value);
+        }
+    }
+    any.then_some(sum)
+}
+
+/// Detect Anthropic Messages-style usage (vs OpenAI Chat/Responses).
+///
+/// Anthropic:
+/// - `input_tokens` is residual (uncached only); top-level cache fields are additive
+/// - `output_tokens` already includes thinking; details are breakdown only
+///
+/// OpenAI / Codex:
+/// - `prompt_tokens`/`input_tokens` already include cached tokens
+/// - `completion_tokens`/`output_tokens` already include reasoning
+/// - nested `*_details` and `total_tokens` are authoritative; never re-add details
+fn is_anthropic_style_usage(usage: &serde_json::Value) -> bool {
+    usage.get("cache_read_input_tokens").is_some()
+        || usage.get("cache_read_tokens").is_some()
+        || usage
+            .get("output_tokens_details")
+            .and_then(|details| details.get("thinking_tokens"))
+            .is_some()
+        || (usage.get("cache_creation_input_tokens").is_some()
+            && usage.get("total_tokens").is_none())
+}
+
 fn extract_usage_values(usage: &serde_json::Value) -> TokenUsage {
-    let prompt = usage
+    // OpenAI: prompt_tokens / completion_tokens
+    // Responses/Codex/Anthropic: input_tokens / output_tokens
+    let raw_prompt = usage
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
         .and_then(|value| value.as_i64())
         .map(|value| value as i32);
-    let completion = usage
+    let raw_completion = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
         .and_then(|value| value.as_i64())
         .map(|value| value as i32);
-    let total = usage
+    let upstream_total = usage
         .get("total_tokens")
         .and_then(|value| value.as_i64())
         .map(|value| value as i32);
 
+    // Anthropic additive cache fields only (top-level). OpenAI nested cached_tokens
+    // are subsets of prompt/input and must not be used for re-aggregation.
+    let top_level_cache_read = usage_i32(
+        usage
+            .get("cache_read_input_tokens")
+            .or_else(|| usage.get("cache_read_tokens")),
+    );
+    let top_level_cache_creation = usage_i32(
+        usage
+            .get("cache_creation_input_tokens")
+            .or_else(|| usage.get("cache_creation_tokens")),
+    );
+
+    // Cache-read detail (OpenAI subset or Anthropic top-level).
     let prompt_cached = usage_i32(
         usage
             .get("prompt_tokens_details")
@@ -159,10 +208,21 @@ fn extract_usage_values(usage: &serde_json::Value) -> TokenUsage {
                     .and_then(|details| details.get("cache_read"))
             }),
     );
+    // Cache-write detail: Anthropic creation fields or OpenAI cache_write_tokens.
     let cache_creation = usage_i32(
         usage
             .get("cache_creation_input_tokens")
             .or_else(|| usage.get("cache_creation_tokens"))
+            .or_else(|| {
+                usage
+                    .get("prompt_tokens_details")
+                    .and_then(|details| details.get("cache_write_tokens"))
+            })
+            .or_else(|| {
+                usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cache_write_tokens"))
+            })
             .or_else(|| {
                 usage
                     .get("input_tokens_details")
@@ -179,6 +239,7 @@ fn extract_usage_values(usage: &serde_json::Value) -> TokenUsage {
                     .and_then(|details| details.get("cache_creation"))
             }),
     );
+    // Reasoning/thinking detail only — never added into completion_tokens.
     let completion_reasoning = usage_i32(
         usage
             .get("completion_tokens_details")
@@ -187,8 +248,43 @@ fn extract_usage_values(usage: &serde_json::Value) -> TokenUsage {
                 usage
                     .get("output_tokens_details")
                     .and_then(|details| details.get("reasoning_tokens"))
-            }),
+            })
+            .or_else(|| {
+                usage
+                    .get("output_tokens_details")
+                    .and_then(|details| details.get("thinking_tokens"))
+            })
+            .or_else(|| usage.get("thinking_tokens")),
     );
+
+    let anthropic_style = is_anthropic_style_usage(usage);
+    let prompt = if anthropic_style {
+        // Anthropic: total input = residual input + cache write + cache read
+        sum_token_parts(&[
+            raw_prompt,
+            top_level_cache_creation,
+            top_level_cache_read,
+        ])
+        .or(raw_prompt)
+    } else {
+        // OpenAI: prompt/input is already the full input (cached is a subset)
+        raw_prompt
+    };
+    // Both vendors: output/completion is the inclusive billed total.
+    let completion = raw_completion;
+    let total = if anthropic_style {
+        // Anthropic has no total_tokens; recompute from aggregated input + output.
+        match (prompt, completion) {
+            (Some(prompt), Some(completion)) => Some(prompt.saturating_add(completion)),
+            _ => upstream_total.or(sum_token_parts(&[prompt, completion])),
+        }
+    } else {
+        // OpenAI: total_tokens is authoritative when present (= input + output).
+        upstream_total.or_else(|| match (prompt, completion) {
+            (Some(prompt), Some(completion)) => Some(prompt.saturating_add(completion)),
+            _ => sum_token_parts(&[prompt, completion]),
+        })
+    };
 
     TokenUsage {
         prompt_tokens: prompt,

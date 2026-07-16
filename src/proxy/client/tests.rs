@@ -153,17 +153,119 @@ fn openai_reasoning_effort_takes_precedence_over_anthropic_output_config() {
 
 #[test]
 fn extracts_usage_from_codex_responses_completion_event() {
-    let response = br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":99424,"output_tokens":440,"total_tokens":99864,"input_tokens_details":{"cached_tokens":12000},"cache_creation_input_tokens":320,"output_tokens_details":{"reasoning_tokens":128}}}}
+    let response = br#"data: {"type":"response.completed","response":{"usage":{"input_tokens":99424,"output_tokens":440,"total_tokens":99864,"input_tokens_details":{"cached_tokens":12000},"output_tokens_details":{"reasoning_tokens":128}}}}
 
 "#;
 
     let usage = extract_usage(response, "text/event-stream");
+    // OpenAI Responses/Codex: input/output already full; cache/reasoning are subsets.
     assert_eq!(usage.prompt_tokens, Some(99424));
     assert_eq!(usage.completion_tokens, Some(440));
     assert_eq!(usage.total_tokens, Some(99864));
     assert_eq!(usage.prompt_cached_tokens, Some(12000));
-    assert_eq!(usage.cache_creation_tokens, Some(320));
+    assert_eq!(usage.cache_creation_tokens, None);
     assert_eq!(usage.completion_reasoning_tokens, Some(128));
+}
+
+#[test]
+fn openai_chat_completions_usage_keeps_details_as_subsets() {
+    // Official OpenAI Chat Completions:
+    //   prompt_tokens includes cached_tokens
+    //   completion_tokens includes reasoning_tokens
+    //   total_tokens = prompt + completion (authoritative when present)
+    // Details must never be added into the main columns.
+    let body = serde_json::to_vec(&json!({
+        "usage": {
+            "prompt_tokens": 2006,
+            "completion_tokens": 300,
+            "total_tokens": 2306,
+            "prompt_tokens_details": {
+                "cached_tokens": 1920,
+                "cache_write_tokens": 80
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 128
+            }
+        }
+    }))
+    .unwrap();
+
+    let usage = extract_usage(&body, "application/json");
+    assert_eq!(usage.prompt_tokens, Some(2006));
+    assert_eq!(usage.completion_tokens, Some(300));
+    assert_eq!(usage.total_tokens, Some(2306));
+    assert_eq!(usage.prompt_cached_tokens, Some(1920));
+    assert_eq!(usage.cache_creation_tokens, Some(80));
+    assert_eq!(usage.completion_reasoning_tokens, Some(128));
+}
+
+#[test]
+fn openai_responses_usage_does_not_double_count_cached_or_reasoning() {
+    let body = serde_json::to_vec(&json!({
+        "usage": {
+            "input_tokens": 75,
+            "input_tokens_details": { "cached_tokens": 0 },
+            "output_tokens": 1186,
+            "output_tokens_details": { "reasoning_tokens": 1024 },
+            "total_tokens": 1261
+        }
+    }))
+    .unwrap();
+
+    let usage = extract_usage(&body, "application/json");
+    assert_eq!(usage.prompt_tokens, Some(75));
+    assert_eq!(usage.completion_tokens, Some(1186));
+    assert_eq!(usage.total_tokens, Some(1261));
+    assert_eq!(usage.prompt_cached_tokens, Some(0));
+    assert_eq!(usage.completion_reasoning_tokens, Some(1024));
+}
+
+#[test]
+fn aggregates_anthropic_style_input_without_adding_thinking() {
+    // Official Anthropic:
+    //   input  = input_tokens + cache_creation + cache_read
+    //   output = output_tokens (thinking already included)
+    //   total  = input + output
+    // Top-level thinking_tokens (if a proxy emits it) is detail only.
+    let body = serde_json::to_vec(&json!({
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 20,
+            "cache_read_input_tokens": 30,
+            "thinking_tokens": 15
+        }
+    }))
+    .unwrap();
+
+    let usage = extract_usage(&body, "application/json");
+    assert_eq!(usage.prompt_tokens, Some(150));
+    assert_eq!(usage.completion_tokens, Some(40));
+    assert_eq!(usage.total_tokens, Some(190));
+    assert_eq!(usage.prompt_cached_tokens, Some(30));
+    assert_eq!(usage.cache_creation_tokens, Some(20));
+    assert_eq!(usage.completion_reasoning_tokens, Some(15));
+}
+
+#[test]
+fn nested_thinking_tokens_are_breakdown_not_added_twice() {
+    // Official: output_tokens_details.thinking_tokens ⊆ output_tokens.
+    let body = serde_json::to_vec(&json!({
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 503,
+            "cache_creation_input_tokens": 50,
+            "cache_read_input_tokens": 25,
+            "output_tokens_details": {"thinking_tokens": 312}
+        }
+    }))
+    .unwrap();
+
+    let usage = extract_usage(&body, "application/json");
+    assert_eq!(usage.prompt_tokens, Some(175));
+    assert_eq!(usage.completion_tokens, Some(503));
+    assert_eq!(usage.total_tokens, Some(678));
+    assert_eq!(usage.completion_reasoning_tokens, Some(312));
 }
 
 #[test]
