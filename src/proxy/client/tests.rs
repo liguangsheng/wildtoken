@@ -1,6 +1,6 @@
 use super::{
-    build_forward_headers, extract_first_token_ms, extract_usage, prepare_upstream_body,
-    proxy_request, sse_bytes_line_is_terminal, validate_header_overrides,
+    build_forward_headers, extract_first_token_ms, extract_reasoning_effort, extract_usage,
+    prepare_upstream_body, proxy_request, sse_bytes_line_is_terminal, validate_header_overrides,
 };
 use crate::{
     config::Settings,
@@ -111,6 +111,44 @@ fn usage_option_is_not_added_to_other_or_non_streaming_requests() {
         let prepared: serde_json::Value = serde_json::from_slice(&prepared).unwrap();
         assert!(prepared.get("stream_options").is_none());
     }
+}
+
+#[test]
+fn extracts_reasoning_effort_from_openai_and_anthropic_requests() {
+    for (body, expected) in [
+        (json!({"reasoning_effort": "high"}), Some("high")),
+        (json!({"reasoning": {"effort": "medium"}}), Some("medium")),
+        (
+            json!({
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "xhigh"}
+            }),
+            Some("xhigh"),
+        ),
+        (
+            json!({
+                "thinking": {"type": "disabled"},
+                "output_config": {"effort": "  high  "}
+            }),
+            Some("high"),
+        ),
+        (json!({"output_config": {"effort": "  "}}), None),
+    ] {
+        let body = serde_json::to_vec(&body).unwrap();
+        assert_eq!(extract_reasoning_effort(&body).as_deref(), expected);
+    }
+}
+
+#[test]
+fn openai_reasoning_effort_takes_precedence_over_anthropic_output_config() {
+    let body = serde_json::to_vec(&json!({
+        "reasoning_effort": "low",
+        "reasoning": {"effort": "medium"},
+        "output_config": {"effort": "high"}
+    }))
+    .unwrap();
+
+    assert_eq!(extract_reasoning_effort(&body).as_deref(), Some("low"));
 }
 
 #[test]

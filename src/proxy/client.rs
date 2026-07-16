@@ -53,11 +53,12 @@ pub fn build_upstream_url(
     target
 }
 
-/// Extract reasoning effort from an OpenAI-compatible request body.
+/// Extract reasoning effort from an OpenAI- or Anthropic-compatible request body.
 ///
 /// Supports:
 /// - top-level `reasoning_effort` (chat completions / o-series)
 /// - nested `reasoning.effort` (Responses API style)
+/// - nested `output_config.effort` (Anthropic Messages API style)
 fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
     let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
 
@@ -79,6 +80,17 @@ fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
     if let Some(s) = json
         .get("reasoning")
         .and_then(|r| r.get("effort"))
+        .and_then(|v| v.as_str())
+    {
+        let s = s.trim();
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+
+    if let Some(s) = json
+        .get("output_config")
+        .and_then(|config| config.get("effort"))
         .and_then(|v| v.as_str())
     {
         let s = s.trim();
