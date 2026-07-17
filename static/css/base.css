@@ -714,11 +714,37 @@ html[data-theme="light"] .theme-toggle-icon::before {
 }
 
 .panel p.log-rpm {
-  color: var(--brand);
-  font-size: var(--text-sm);
+  align-items: baseline;
+  background: linear-gradient(135deg, var(--accent-soft), rgb(34 211 238 / 5%));
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  color: var(--muted-strong);
+  display: inline-flex;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  letter-spacing: 0.01em;
+  gap: 7px;
+  line-height: 1;
+  margin-top: 8px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.log-rpm-window,
+.log-rpm-unit {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.log-rpm-value {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 800;
+  line-height: 0.95;
 }
 
 .panel-head {

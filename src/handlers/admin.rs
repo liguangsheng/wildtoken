@@ -6,7 +6,9 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::db::{log as log_db, settings as settings_db, token as token_db};
+use crate::db::{
+    log as log_db, log_stats as log_stats_db, settings as settings_db, token as token_db,
+};
 use crate::error::AppError;
 use crate::middleware::auth::AdminAuth;
 use crate::models::request_log::{RequestLogCursorOut, RequestLogPage, TokenUsageStatsOut};
@@ -212,6 +214,9 @@ pub async fn admin_system_info(
         None
     };
     let log_stats = state.log_stats.snapshot();
+    let recent_one_minute_log_count = log_stats_db::recent_one_minute_log_count(&state.db)
+        .await
+        .unwrap_or(0);
     let (enabled_upstream_count, total_upstream_count) = sqlx::query_as::<_, (i64, i64)>(
         "SELECT COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0), COUNT(*) FROM upstreams",
     )
@@ -232,7 +237,7 @@ pub async fn admin_system_info(
         log_count_24h: log_stats.log_count_24h,
         enabled_upstream_count,
         total_upstream_count,
-        recent_one_minute_log_count: log_stats.recent_one_minute_log_count,
+        recent_one_minute_log_count,
         runtime_log_settings: RuntimeLogSettingsSummary {
             log_body_keep_count: settings.log_body_keep_count,
             log_retention_days: settings.log_retention_days,
@@ -436,7 +441,7 @@ pub async fn admin_list_logs(
     } else {
         None
     };
-    let recent_rpm = state.log_stats.snapshot().recent_one_minute_log_count;
+    let recent_rpm = log_stats_db::recent_one_minute_log_count(&state.db).await?;
     Ok(Json(RequestLogPage {
         items,
         has_more,

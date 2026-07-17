@@ -301,7 +301,11 @@
             <div class="panel-head">
               <div>
                 <h2>使用日志</h2>
-                <p id="log-rpm" class="log-rpm" aria-live="polite">RPM —</p>
+                <p id="log-rpm" class="log-rpm" aria-live="polite">
+                  <span class="log-rpm-window">近 60 秒</span>
+                  <span class="log-rpm-value">—</span>
+                  <span class="log-rpm-unit">RPM</span>
+                </p>
               </div>
               <div class="log-toolbar">
                 <label class="log-filter">
@@ -697,6 +701,7 @@
               <span>仅看已选</span>
             </label>
             <button id="model-select-all" type="button" class="secondary">全选</button>
+            <button id="model-remove-unavailable" type="button" class="secondary" hidden>移除未返回</button>
             <button id="model-clear-all" type="button" class="secondary">清空</button>
           </div>
         </div>

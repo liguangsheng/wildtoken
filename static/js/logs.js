@@ -201,7 +201,19 @@ function formatThroughput(log) {
 function updateLogRpm(recentRpm) {
   if (logRpm) {
     const count = Number(recentRpm);
-    logRpm.textContent = `RPM ${Number.isFinite(count) && count >= 0 ? count : "—"}`;
+    const displayCount = Number.isFinite(count) && count >= 0
+      ? count.toLocaleString("zh-CN")
+      : "—";
+    logRpm.innerHTML = `
+      <span class="log-rpm-window">近 60 秒</span>
+      <span class="log-rpm-value">${displayCount}</span>
+      <span class="log-rpm-unit">RPM</span>
+    `;
+    const label = displayCount === "—"
+      ? "最近 60 秒全局请求数暂不可用"
+      : `最近 60 秒全局请求数 ${displayCount} RPM`;
+    logRpm.title = `${label}；不受当前筛选和分页影响`;
+    logRpm.setAttribute("aria-label", label);
   }
 }
 

@@ -77,12 +77,31 @@ function getVisibleDialogModels() {
   });
 }
 
+function getUnavailableSelectedModels() {
+  if (!modelDialogState.catalogLoaded) {
+    return [];
+  }
+  return [...modelDialogState.selected]
+    .filter((model) => !modelDialogState.available.has(model));
+}
+
+function updateRemoveUnavailableButton(unavailableCount = getUnavailableSelectedModels().length) {
+  if (!modelRemoveUnavailableButton) {
+    return;
+  }
+  modelRemoveUnavailableButton.hidden = !modelDialogState.catalogLoaded;
+  modelRemoveUnavailableButton.disabled = !modelDialogState.catalogLoaded || unavailableCount === 0;
+  modelRemoveUnavailableButton.title = unavailableCount > 0
+    ? `移除 ${unavailableCount} 个不在本次拉取列表中的已选模型`
+    : "没有需要移除的未返回模型";
+}
+
 function renderModelDialogSummary() {
   const parts = [`已选择 ${modelDialogState.selected.size}`];
+  let unavailableCount = 0;
   if (modelDialogState.catalogLoaded) {
     parts.push(`上游返回 ${modelDialogState.available.size}`);
-    const unavailableCount = [...modelDialogState.selected]
-      .filter((model) => !modelDialogState.available.has(model)).length;
+    unavailableCount = getUnavailableSelectedModels().length;
     if (unavailableCount > 0) {
       parts.push(`${unavailableCount} 个未由上游返回`);
     }
@@ -90,6 +109,7 @@ function renderModelDialogSummary() {
     parts.push(`列表 ${modelDialogState.models.length}`);
   }
   modelDialogSummary.textContent = parts.join(" · ");
+  updateRemoveUnavailableButton(unavailableCount);
 }
 
 function renderModelOptions() {
@@ -655,11 +675,18 @@ quickImportFillButton.addEventListener("click", async () => {
   }
 
   resetForm();
+  let overwriteName = "";
   if (baseUrl) {
     fields.baseUrl.value = baseUrl;
     const suggestedName = suggestNameFromUrl(baseUrl);
     if (suggestedName) {
       fields.name.value = suggestedName;
+      const existing = upstreams.find((item) => item.name === suggestedName);
+      if (existing) {
+        fields.id.value = String(existing.id);
+        formTitle.textContent = `覆盖渠道：${existing.name}`;
+        overwriteName = existing.name;
+      }
     }
   }
   if (apiKey) {
@@ -669,14 +696,17 @@ quickImportFillButton.addEventListener("click", async () => {
   fields.priority.value = QUICK_IMPORT_DEFAULT_PRIORITY;
   closeQuickImportDialog();
   openUpstreamDialog();
+  const overwriteHint = overwriteName
+    ? `检测到同名渠道「${overwriteName}」，保存时将覆盖。`
+    : "";
   if (fetchError) {
     setStatus(
-      `已填入快速导入信息并将优先级设为 ${QUICK_IMPORT_DEFAULT_PRIORITY}；自动拉取模型失败：${fetchError.message}。可在表单中重试。`,
+      `已填入快速导入信息并将优先级设为 ${QUICK_IMPORT_DEFAULT_PRIORITY}；自动拉取模型失败：${fetchError.message}。可在表单中重试。${overwriteHint}`,
       "error",
     );
   } else if (baseUrl) {
     setStatus(
-      `已填入 ${models.length} 个模型，优先级为 ${QUICK_IMPORT_DEFAULT_PRIORITY}。请检查后保存。`,
+      `已填入 ${models.length} 个模型，优先级为 ${QUICK_IMPORT_DEFAULT_PRIORITY}。${overwriteHint || "请检查后保存。"}`,
       "ok",
     );
   } else {
@@ -723,6 +753,18 @@ modelSelectAllButton.addEventListener("click", () => {
     modelDialogState.selected.add(model);
   }
   renderModelOptions();
+});
+modelRemoveUnavailableButton.addEventListener("click", () => {
+  const unavailableModels = getUnavailableSelectedModels();
+  if (unavailableModels.length === 0) {
+    renderModelOptions();
+    return;
+  }
+  for (const model of unavailableModels) {
+    modelDialogState.selected.delete(model);
+  }
+  renderModelOptions();
+  setStatus(`已移除 ${unavailableModels.length} 个未返回模型。`, "ok");
 });
 modelClearAllButton.addEventListener("click", () => {
   for (const model of getVisibleDialogModels()) {

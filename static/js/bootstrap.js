@@ -276,6 +276,7 @@ const modelFilter = document.querySelector("#model-filter");
 const modelOptions = document.querySelector("#model-options");
 const modelSelectedOnly = document.querySelector("#model-selected-only");
 const modelSelectAllButton = document.querySelector("#model-select-all");
+const modelRemoveUnavailableButton = document.querySelector("#model-remove-unavailable");
 const modelClearAllButton = document.querySelector("#model-clear-all");
 const modelManualEntry = document.querySelector("#model-manual-entry");
 const modelManualInput = document.querySelector("#model-manual-input");

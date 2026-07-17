@@ -699,6 +699,15 @@ button.model-selection-remove:focus-visible {
   gap: 8px;
 }
 
+.model-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.model-toolbar-actions button {
+  white-space: nowrap;
+}
+
 .model-selected-toggle {
   align-items: center;
   color: var(--text-secondary);

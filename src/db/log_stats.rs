@@ -28,7 +28,6 @@ pub struct PersistedLogStats {
 pub struct LogStatsSnapshot {
     pub total_log_count: i64,
     pub log_count_24h: i64,
-    pub recent_one_minute_log_count: i64,
     pub token_usage: TokenUsageStatsOut,
 }
 
@@ -175,6 +174,19 @@ impl LogStatsCache {
     }
 }
 
+/// Count request logs in the strict trailing 60-second window.
+///
+/// Keep RPM separate from the minute-bucket cache: minute buckets are precise
+/// enough for multi-day usage summaries, but cannot represent a rolling
+/// second-level boundary without over-counting part of the previous minute.
+pub async fn recent_one_minute_log_count(pool: &SqlitePool) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM request_logs WHERE created_at >= datetime('now', '-60 seconds')",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
 impl LogStatsState {
     fn apply_persisted_entry(&mut self, entry: PersistedLogStats, now: DateTime<Utc>) {
         self.total_log_count = self.total_log_count.saturating_add(1);
@@ -210,14 +222,11 @@ impl LogStatsState {
         let one_day_cutoff = floor_to_minute((now - chrono::Duration::days(1)).timestamp());
         let seven_days_cutoff = floor_to_minute((now - chrono::Duration::days(7)).timestamp());
         let thirty_days_cutoff = floor_to_minute(oldest_window_start(now));
-        let recent_one_minute_cutoff =
-            floor_to_minute((now - chrono::Duration::seconds(60)).timestamp());
 
         let mut today = LogStatsBucket::default();
         let mut one_day = LogStatsBucket::default();
         let mut seven_days = LogStatsBucket::default();
         let mut thirty_days = LogStatsBucket::default();
-        let mut recent_one_minute_log_count = 0_i64;
 
         for (bucket_start, bucket) in &self.minute_buckets {
             if *bucket_start >= today_cutoff {
@@ -232,16 +241,11 @@ impl LogStatsState {
             if *bucket_start >= thirty_days_cutoff {
                 thirty_days.add(*bucket);
             }
-            if *bucket_start >= recent_one_minute_cutoff {
-                recent_one_minute_log_count =
-                    recent_one_minute_log_count.saturating_add(bucket.request_count);
-            }
         }
 
         LogStatsSnapshot {
             total_log_count: self.total_log_count,
             log_count_24h: one_day.request_count,
-            recent_one_minute_log_count,
             token_usage: TokenUsageStatsOut {
                 today: today.into_window(),
                 one_day: one_day.into_window(),
@@ -315,7 +319,7 @@ mod tests {
 
     use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
-    use super::{LogStatsCache, PersistedLogStats};
+    use super::{recent_one_minute_log_count, LogStatsCache, PersistedLogStats};
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -356,7 +360,6 @@ mod tests {
 
         assert_eq!(snapshot.total_log_count, 5);
         assert_eq!(snapshot.log_count_24h, 2);
-        assert_eq!(snapshot.recent_one_minute_log_count, 2);
         assert_eq!(
             (
                 snapshot.token_usage.today.total_tokens,
@@ -412,10 +415,25 @@ mod tests {
         let snapshot = cache.snapshot();
         assert_eq!(snapshot.total_log_count, 2);
         assert_eq!(snapshot.log_count_24h, 2);
-        assert_eq!(snapshot.recent_one_minute_log_count, 2);
         assert_eq!(snapshot.token_usage.thirty_days.total_tokens, 12);
         assert_eq!(snapshot.token_usage.thirty_days.request_count, 1);
         assert_eq!(snapshot.token_usage.thirty_days.all_request_count, 2);
+    }
+
+    #[tokio::test]
+    async fn recent_one_minute_count_uses_strict_sixty_second_window() {
+        let pool = test_pool().await;
+        sqlx::query(
+            r#"INSERT INTO request_logs (id, created_at, total_tokens) VALUES
+               (1, datetime('now'), 10),
+               (2, datetime('now', '-30 seconds'), 20),
+               (3, datetime('now', '-90 seconds'), 30)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(recent_one_minute_log_count(&pool).await.unwrap(), 2);
     }
 
     #[tokio::test]

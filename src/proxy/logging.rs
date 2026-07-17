@@ -502,7 +502,6 @@ mod tests {
         let log_stats_snapshot = log_stats.snapshot();
         assert_eq!(log_stats_snapshot.total_log_count, 2);
         assert_eq!(log_stats_snapshot.log_count_24h, 2);
-        assert_eq!(log_stats_snapshot.recent_one_minute_log_count, 2);
     }
 
     #[tokio::test]
