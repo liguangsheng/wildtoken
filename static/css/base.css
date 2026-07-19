@@ -772,6 +772,38 @@ html[data-theme="light"] .theme-toggle-icon::before {
   min-width: 72px;
 }
 
+.log-toolbar > .log-sensitive-toggle {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  min-width: 34px;
+  padding: 0;
+  width: 34px;
+}
+
+.log-sensitive-toggle svg {
+  fill: none;
+  height: 17px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 17px;
+}
+
+.log-sensitive-toggle .log-sensitive-slash {
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.log-sensitive-toggle.is-active {
+  color: var(--accent);
+}
+
+.log-sensitive-toggle.is-active .log-sensitive-slash {
+  opacity: 1;
+}
+
 .log-filter {
   color: var(--muted);
   display: flex;
@@ -795,6 +827,11 @@ html[data-theme="light"] .theme-toggle-icon::before {
 
 .log-filter input {
   min-width: 180px;
+}
+
+.log-filter-channel select {
+  min-width: 220px;
+  width: clamp(220px, 22vw, 300px);
 }
 
 .view-toolbar {

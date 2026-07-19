@@ -811,6 +811,11 @@ if (logClientFilter) {
     loadLogs();
   });
 }
+if (logSensitiveToggle) {
+  logSensitiveToggle.addEventListener("click", () => {
+    setLogSensitiveHidden(!logSensitiveHidden);
+  });
+}
 logRefreshButton.addEventListener("click", async () => {
   logRefreshButton.disabled = true;
   logRefreshButton.setAttribute("aria-busy", "true");

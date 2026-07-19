@@ -281,8 +281,7 @@
                       <input type="checkbox" id="upstream-select-all" aria-label="全选当前筛选渠道" />
                     </th>
                     <th class="col-id" data-col="id" aria-sort="none"><button type="button" class="table-sort-button" data-upstream-sort="id">ID <span aria-hidden="true"></span></button></th>
-                    <th data-col="name" aria-sort="none"><button type="button" class="table-sort-button" data-upstream-sort="name">名称 <span aria-hidden="true"></span></button></th>
-                    <th data-col="base_url">Base URL</th>
+                    <th data-col="name" aria-sort="none"><button type="button" class="table-sort-button" data-upstream-sort="name">渠道名 <span aria-hidden="true"></span></button></th>
                     <th data-col="models">模型匹配</th>
                     <th data-col="priority" aria-sort="descending"><button type="button" class="table-sort-button" data-upstream-sort="priority">优先级 <span aria-hidden="true">↓</span></button></th>
                     <th data-col="weight">权重</th>
@@ -311,7 +310,7 @@
                 </p>
               </div>
               <div class="log-toolbar">
-                <label class="log-filter">
+                <label class="log-filter log-filter-channel">
                   渠道
                   <select id="log-upstream-filter">
                     <option value="">全部渠道</option>
@@ -352,6 +351,20 @@
                   <button type="button" id="log-col-menu-btn" class="secondary ghost col-menu-btn" aria-haspopup="true" aria-expanded="false">列</button>
                   <div id="log-col-menu" class="col-menu" hidden role="menu" aria-label="日志列显示"></div>
                 </div>
+                <button
+                  id="log-sensitive-toggle"
+                  type="button"
+                  class="secondary ghost log-sensitive-toggle is-active"
+                  aria-pressed="true"
+                  aria-label="敏感信息已屏蔽，点击显示令牌与渠道名"
+                  title="敏感信息已屏蔽，点击显示令牌与渠道名"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path class="log-sensitive-eye" d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12 18.1 17.5 12 17.5 2.5 12 2.5 12Z"></path>
+                    <circle class="log-sensitive-eye" cx="12" cy="12" r="2.5"></circle>
+                    <path class="log-sensitive-slash" d="m4 4 16 16"></path>
+                  </svg>
+                </button>
                 <button id="log-refresh" type="button" class="secondary">刷新</button>
               </div>
             </div>

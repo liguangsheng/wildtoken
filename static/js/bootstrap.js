@@ -101,6 +101,7 @@ const logUpstreamFilter = document.querySelector("#log-upstream-filter");
 const logSearchInput = document.querySelector("#log-search");
 const logStatusFilter = document.querySelector("#log-status-filter");
 const logClientFilter = document.querySelector("#log-client-filter");
+const logSensitiveToggle = document.querySelector("#log-sensitive-toggle");
 const logRefreshButton = document.querySelector("#log-refresh");
 const logPrevButton = document.querySelector("#log-prev");
 const logNextButton = document.querySelector("#log-next");
@@ -124,6 +125,7 @@ const DASHBOARD_TOP_WINDOW_VALUES = new Set(["today", "1d", "3d", "7d", "30d"]);
 const DENSITY_KEY = "wildtoken_density";
 const LOG_COLUMNS_KEY = "wildtoken_log_columns";
 const UPSTREAM_COLUMNS_KEY = "wildtoken_upstream_columns";
+const LOG_SENSITIVE_HIDDEN_KEY = "wildtoken_log_sensitive_hidden";
 let logOffset = 0;
 let logHasMore = false;
 let logCursorStack = [];
@@ -132,6 +134,13 @@ let logNextCursor = null;
 let logRefreshTimer = null;
 let logsLoadedOnce = false;
 let logsLoading = false;
+let logSensitiveHidden = (() => {
+  try {
+    return localStorage.getItem(LOG_SENSITIVE_HIDDEN_KEY) !== "false";
+  } catch {
+    return true;
+  }
+})();
 
 let dashboardLogItems = [];
 let dashboardTokenUsage = null;
@@ -728,7 +737,6 @@ const DEFAULT_UPSTREAM_COLUMNS = {
   check: true,
   id: true,
   name: true,
-  base_url: true,
   models: true,
   priority: true,
   weight: true,
@@ -754,8 +762,7 @@ const LOG_LOCKED_COLS = new Set(["time", "status"]);
 const UPSTREAM_COL_LABELS = {
   check: "选择",
   id: "ID",
-  name: "名称",
-  base_url: "Base URL",
+  name: "渠道名",
   models: "模型匹配",
   priority: "优先级",
   weight: "权重",

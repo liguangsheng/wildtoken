@@ -356,7 +356,7 @@ function renderRows() {
   rows.innerHTML = "";
   renderUpstreamSummary();
 
-  const colCount = 9;
+  const colCount = 8;
 
   if (upstreamsLoading && !upstreamsLoadedOnce) {
     rows.innerHTML = skeletonRowsMarkup(colCount, 6);
@@ -411,11 +411,8 @@ function renderRows() {
       <td class="name-cell" data-col="name">
         <div class="name-stack">
           <strong title="${escapeHtml(upstream.name)}">${escapeHtml(upstream.name)}</strong>
-          <span class="muted">${upstream.api_key_set ? "API Key 已配置" : "使用下游 Authorization"}</span>
+          ${renderBaseUrlCell(upstream)}
         </div>
-      </td>
-      <td class="url-cell" data-col="base_url">
-        ${renderBaseUrlCell(upstream)}
       </td>
       <td class="match-cell" data-col="models">${renderModelMatches(upstream)}</td>
       <td class="col-priority" data-col="priority">

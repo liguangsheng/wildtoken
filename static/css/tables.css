@@ -285,8 +285,8 @@ td.no-match-state {
 /* ── Table cells ─────────────────────────────────────────── */
 
 .name-cell {
-  min-width: 190px;
-  width: 22%;
+  min-width: 260px;
+  width: 30%;
 }
 
 .name-stack {
@@ -300,54 +300,43 @@ td.no-match-state {
   white-space: nowrap;
 }
 
-.url-cell {
-  max-width: 280px;
-  min-width: 220px;
-  width: 26%;
-}
-
 .url-cell-inner {
   align-items: center;
-  background: var(--panel-subtle);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   display: inline-flex;
-  gap: 2px;
+  gap: 3px;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
   vertical-align: middle;
+  width: 100%;
 }
 
-.url-cell code {
-  background: var(--panel-subtle);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
+.url-cell-inner code {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
   display: block;
+  flex: 0 1 auto;
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  min-width: 0;
   overflow: hidden;
-  padding: 3px 6px;
+  padding: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.url-cell code {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  flex: 0 1 auto;
-  min-width: 0;
-  padding: 3px 4px 3px 6px;
-}
-
 .url-cell-actions {
-  align-self: stretch;
+  align-self: center;
   display: inline-flex;
   flex: 0 0 auto;
   gap: 0;
-  padding: 2px 2px 2px 0;
+  padding: 0;
 }
 
 .url-action {
@@ -355,19 +344,19 @@ td.no-match-state {
   border-color: transparent;
   border-radius: var(--radius-sm);
   color: var(--muted);
-  min-height: 22px;
+  min-height: 18px;
   padding: 0;
-  width: 22px;
+  width: 18px;
 }
 
 .url-action svg {
   fill: none;
-  height: 14px;
+  height: 12px;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
-  width: 14px;
+  width: 12px;
 }
 
 .url-action:hover,
@@ -492,6 +481,13 @@ td.no-match-state {
 
 .channel-stack {
   min-width: 0;
+}
+
+.log-sensitive-value {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-style: normal;
+  letter-spacing: 0.08em;
 }
 
 .model-cell {

@@ -154,6 +154,13 @@
     min-width: 72px;
   }
 
+  .log-toolbar > .log-sensitive-toggle {
+    grid-column: auto;
+    justify-self: start;
+    min-width: 34px;
+    width: 34px;
+  }
+
   .log-filter {
     min-width: 0;
   }
@@ -198,20 +205,14 @@
     max-width: 100%;
   }
 
-  /* Keep the two channel identifiers visible with less horizontal scrolling. */
+  /* Keep channel identity visible with less horizontal scrolling. */
   .upstream-table {
-    min-width: 880px;
+    min-width: 740px;
   }
 
   .upstream-table .name-cell {
-    min-width: 128px;
-    width: 128px;
-  }
-
-  .upstream-table .url-cell {
-    max-width: 172px;
-    min-width: 172px;
-    width: 172px;
+    min-width: 210px;
+    width: 210px;
   }
 
   .upstream-table .name-stack .muted {
@@ -483,18 +484,12 @@
   }
 
   .upstream-table {
-    min-width: 800px;
+    min-width: 700px;
   }
 
   .upstream-table .name-cell {
-    min-width: 108px;
-    width: 108px;
-  }
-
-  .upstream-table .url-cell {
-    max-width: 152px;
-    min-width: 152px;
-    width: 152px;
+    min-width: 190px;
+    width: 190px;
   }
 
   .topbar {
@@ -540,6 +535,10 @@
   .log-toolbar > button,
   .modal-footer button {
     width: 100%;
+  }
+
+  .log-toolbar > .log-sensitive-toggle {
+    width: 34px;
   }
 
   .modal-footer {

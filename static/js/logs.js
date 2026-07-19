@@ -1,11 +1,24 @@
 // Request log list, performance formatting, snapshots, and detail dialog.
+const LOG_SENSITIVE_MASK = "******";
+let logPageItems = [];
+let logPageFiltersActive = false;
+
+function formatLogUpstreamFilterLabel(upstream) {
+  const id = upstream?.id;
+  const name = String(upstream?.name || "").trim();
+  if (logSensitiveHidden && name) {
+    return `#${id} · ${LOG_SENSITIVE_MASK}`;
+  }
+  return name ? `#${id} ${name}` : `#${id}`;
+}
+
 function renderLogFilterOptions() {
   const selected = logUpstreamFilter.value;
   logUpstreamFilter.innerHTML = '<option value="">全部渠道</option>';
   for (const upstream of upstreams) {
     const option = document.createElement("option");
     option.value = upstream.id;
-    option.textContent = `#${upstream.id} ${upstream.name}`;
+    option.textContent = formatLogUpstreamFilterLabel(upstream);
     logUpstreamFilter.append(option);
   }
   logUpstreamFilter.value = selected;
@@ -16,7 +29,13 @@ function formatLogChannelLabel(log) {
   const id = log?.upstream_id;
   const name = (log?.upstream_name || "").trim();
   if (id !== null && id !== undefined) {
+    if (logSensitiveHidden && name) {
+      return `#${id} · ${LOG_SENSITIVE_MASK}`;
+    }
     return name ? `#${id} · ${name}` : `#${id}`;
+  }
+  if (logSensitiveHidden && name) {
+    return LOG_SENSITIVE_MASK;
   }
   return name || "未匹配到渠道";
 }
@@ -25,20 +44,22 @@ function formatLogChannelLabel(log) {
 function formatLogChannelStack(log) {
   const id = log?.upstream_id;
   const name = (log?.upstream_name || "").trim();
+  const nameHidden = logSensitiveHidden && Boolean(name);
+  const displayName = nameHidden ? LOG_SENSITIVE_MASK : name;
   if (id === null || id === undefined) {
     if (name) {
       return `
         <div class="channel-stack">
-          <strong title="${escapeHtml(name)}">${escapeHtml(name)}</strong>
+          <strong${nameHidden ? " class=\"log-sensitive-value\"" : ` title="${escapeHtml(name)}"`}>${escapeHtml(nameHidden ? LOG_SENSITIVE_MASK : name)}</strong>
           <span class="muted">无 ID</span>
         </div>
       `;
     }
     return "<span class=\"muted\">无（未匹配到渠道）</span>";
   }
-  const title = name ? `#${id} · ${name}` : `#${id}`;
+  const title = name ? `#${id} · ${displayName}` : `#${id}`;
   const nameLine = name
-    ? `<span class="muted" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`
+    ? `<span class="muted${nameHidden ? " log-sensitive-value" : ""}"${nameHidden ? "" : ` title="${escapeHtml(name)}"`}>${escapeHtml(displayName)}</span>`
     : "<span class=\"muted\">无名称</span>";
   return `
     <div class="channel-stack">
@@ -46,6 +67,17 @@ function formatLogChannelStack(log) {
       ${nameLine}
     </div>
   `;
+}
+
+function formatLogToken(log) {
+  const name = String(log?.downstream_token_name || "").trim();
+  if (!name) {
+    return '<span class="muted">-</span>';
+  }
+  if (logSensitiveHidden) {
+    return `<span class="log-sensitive-value">${LOG_SENSITIVE_MASK}</span>`;
+  }
+  return `<span title="#${log.downstream_token_id ?? "-"}">${escapeHtml(name)}</span>`;
 }
 
 function getLogModelRoute(log) {
@@ -84,6 +116,36 @@ function renderLogModel(log) {
       <span class="model-route-line model-route-target">
         <span class="model-route-icon" aria-hidden="true">↳</span>
         <span class="model-text model-upstream">${escapeHtml(route.upstream)}</span>
+      </span>
+    </span>
+  `;
+}
+
+function getReasoningEffortRoute(log) {
+  const request = String(log?.reasoning_effort || "").trim();
+  const response = String(log?.response_reasoning_effort || "").trim();
+  const mapped = Boolean(request && response && request !== response);
+  return { request, response, mapped };
+}
+
+function renderLogReasoningEffort(log) {
+  const route = getReasoningEffortRoute(log);
+  if (!route.request && !route.response) {
+    return '<span class="muted">-</span>';
+  }
+  if (!route.mapped) {
+    const value = route.request || route.response;
+    return `<span class="model-text model-single" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`;
+  }
+  const title = `请求强度：${route.request}；响应强度：${route.response}`;
+  return `
+    <span class="model-route" title="${escapeHtml(title)}">
+      <span class="model-route-line">
+        <span class="model-text model-request">${escapeHtml(route.request)}</span>
+      </span>
+      <span class="model-route-line model-route-target">
+        <span class="model-route-icon" aria-hidden="true">↳</span>
+        <span class="model-text model-upstream">${escapeHtml(route.response)}</span>
       </span>
     </span>
   `;
@@ -312,6 +374,51 @@ function resetLogPagination() {
   logNextCursor = null;
 }
 
+function logRenderOptions() {
+  return {
+    noMatch: logPageFiltersActive && logPageItems.length === 0,
+    emptyTitle: "暂无请求日志",
+    emptyCopy: logPageFiltersActive ? "全库中没有符合当前筛选条件的日志。" : "暂无代理请求记录。",
+  };
+}
+
+function renderCurrentLogPage() {
+  renderLogRows(logPageItems, logRenderOptions());
+}
+
+function updateLogSensitiveToggle() {
+  if (!logSensitiveToggle) return;
+  const hidden = logSensitiveHidden;
+  const label = hidden
+    ? "敏感信息已屏蔽，点击显示令牌与渠道名"
+    : "敏感信息显示中，点击屏蔽令牌与渠道名";
+  logSensitiveToggle.setAttribute("aria-pressed", String(hidden));
+  logSensitiveToggle.setAttribute("aria-label", label);
+  logSensitiveToggle.title = label;
+  logSensitiveToggle.classList.toggle("is-active", hidden);
+}
+
+function refreshOpenLogDetail() {
+  if (!currentLogDetail || !logDetailDialog?.open) return;
+  logDetailSummary.textContent = formatLogDetailSummary(currentLogDetail);
+  if (logDetailMeta) {
+    logDetailMeta.innerHTML = formatLogDetailMeta(currentLogDetail);
+  }
+}
+
+function setLogSensitiveHidden(hidden) {
+  logSensitiveHidden = Boolean(hidden);
+  try {
+    localStorage.setItem(LOG_SENSITIVE_HIDDEN_KEY, String(logSensitiveHidden));
+  } catch {
+    // The current-page preference still applies when storage is unavailable.
+  }
+  updateLogSensitiveToggle();
+  renderLogFilterOptions();
+  renderCurrentLogPage();
+  refreshOpenLogDetail();
+}
+
 function appendLogPaginationParams(params) {
   const cursor = normalizeLogCursor(logCurrentCursor);
   if (cursor) {
@@ -401,11 +508,11 @@ function renderLogRows(items, options = {}) {
         <span class="muted">#${log.id}</span>
       </td>
       <td class="channel-cell" data-col="channel">${channel}</td>
-      <td class="token-cell" data-col="token">${log.downstream_token_name ? `<span title="#${log.downstream_token_id ?? "-"}">${escapeHtml(log.downstream_token_name)}</span>` : "<span class=\"muted\">-</span>"}</td>
+      <td class="token-cell" data-col="token">${formatLogToken(log)}</td>
       <td data-col="client"><span class="badge neutral">${escapeHtml(log.client_type || "unknown")}</span></td>
       <td class="model-cell" data-col="model">${renderLogModel(log)}</td>
       <td class="col-reasoning" data-col="reasoning">
-        ${formatReasoningEffort(log.reasoning_effort, log.response_reasoning_effort)}
+        ${renderLogReasoningEffort(log)}
       </td>
       <td data-col="status">${status}</td>
       <td class="duration-cell" data-col="duration">
@@ -595,6 +702,15 @@ function extractLogDetailError(detail) {
   );
 }
 
+function formatLogDetailSummary(detail) {
+  const time = formatLogTimestamp(detail.created_at);
+  const channel = formatLogChannelLabel(detail);
+  const status = detail.status_code === null || detail.status_code === undefined
+    ? "无响应"
+    : `HTTP ${detail.status_code}`;
+  return `#${detail.id} · ${time} · ${channel} · ${formatLogModelText(detail)} · ${status}`;
+}
+
 function formatLogDetailMeta(detail) {
   const channel = formatLogChannelLabel(detail);
   const statusText = detail.status_code === null || detail.status_code === undefined
@@ -772,11 +888,8 @@ async function showLogDetail(logId) {
   try {
     const detail = await api(`/api/admin/logs/${logId}`);
     currentLogDetail = detail;
-    const time = formatLogTimestamp(detail.created_at);
-    const channel = formatLogChannelLabel(detail);
-    const status = detail.status_code === null ? "无响应" : `HTTP ${detail.status_code}`;
     logDetailTitle.textContent = "请求详情";
-    logDetailSummary.textContent = `#${detail.id} · ${time} · ${channel} · ${formatLogModelText(detail)} · ${status}`;
+    logDetailSummary.textContent = formatLogDetailSummary(detail);
     if (logDetailMeta) {
       logDetailMeta.innerHTML = formatLogDetailMeta(detail);
     }
@@ -827,11 +940,9 @@ async function loadLogs() {
     logNextCursor = normalizeLogCursor(page.next_cursor)
       || (logHasMore && items.length > 0 ? normalizeLogCursor(items[items.length - 1]) : null);
     logsLoadedOnce = true;
-    renderLogRows(items, {
-      noMatch: filtersActive && items.length === 0,
-      emptyTitle: "暂无请求日志",
-      emptyCopy: filtersActive ? "全库中没有符合当前筛选条件的日志。" : "暂无代理请求记录。",
-    });
+    logPageItems = items;
+    logPageFiltersActive = filtersActive;
+    renderCurrentLogPage();
     updateLogRates(page.recent_rpm, page.recent_tpm);
     logPrevButton.disabled = logCursorStack.length === 0;
     logNextButton.disabled = !logHasMore || !logNextCursor;
@@ -843,3 +954,5 @@ async function loadLogs() {
     logsLoading = false;
   }
 }
+
+updateLogSensitiveToggle();
