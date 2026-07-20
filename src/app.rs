@@ -280,6 +280,10 @@ pub async fn run_server(
         // Logs
         .route("/api/admin/logs", get(handlers::admin::admin_list_logs))
         .route(
+            "/api/admin/logs/stream",
+            get(handlers::admin::admin_stream_logs),
+        )
+        .route(
             "/api/admin/logs/token-usage",
             get(handlers::admin::admin_token_usage_stats),
         )

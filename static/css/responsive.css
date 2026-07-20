@@ -161,6 +161,15 @@
     width: 34px;
   }
 
+  .log-new-entries-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .log-new-entries-notice button {
+    width: 100%;
+  }
+
   .log-filter {
     min-width: 0;
   }

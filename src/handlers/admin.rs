@@ -1,7 +1,12 @@
+use std::{convert::Infallible, sync::atomic::Ordering, time::Duration};
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     Json,
 };
 use serde::Deserialize;
@@ -449,6 +454,65 @@ pub async fn admin_list_logs(
         recent_tpm: recent_rate.total_tokens,
         next_cursor,
     }))
+}
+
+/// Stream lightweight list-row events for request logs that have committed to SQLite.
+///
+/// This endpoint intentionally does not replay historical rows. A disconnected
+/// or lagged client reloads the normal paginated endpoint, which remains the
+/// source of truth and keeps cursor pagination stable.
+pub async fn admin_stream_logs(
+    State(state): State<AppState>,
+    auth: AdminAuth,
+) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let receiver = state.log_writer.subscribe_log_events();
+    let credential_version = state.admin_credential_version.clone();
+    let authenticated_version = auth.credential_version;
+    let auth_check_interval = tokio::time::interval(Duration::from_secs(15));
+
+    let stream = futures::stream::unfold(
+        (receiver, auth_check_interval),
+        move |(mut receiver, mut auth_check_interval)| {
+            let credential_version = credential_version.clone();
+            async move {
+                loop {
+                    tokio::select! {
+                        result = receiver.recv() => match result {
+                            Ok(log) => {
+                                if credential_version.load(Ordering::Acquire) != authenticated_version {
+                                    return None;
+                                }
+                                let log_id = log.log.id;
+                                let data = serde_json::to_string(&log)
+                                    .unwrap_or_else(|_| format!(r#"{{"log":{{"id":{log_id}}}}}"#));
+                                let event = Event::default()
+                                    .event("log")
+                                    .id(log_id.to_string())
+                                    .data(data);
+                                return Some((Ok(event), (receiver, auth_check_interval)));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                let event = Event::default().event("resync").data("{}");
+                                return Some((Ok(event), (receiver, auth_check_interval)));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                        },
+                        _ = auth_check_interval.tick() => {
+                            if credential_version.load(Ordering::Acquire) != authenticated_version {
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    )
 }
 
 pub async fn admin_token_usage_stats(

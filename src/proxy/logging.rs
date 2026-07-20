@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::db::log_stats::{LogStatsCache, PersistedLogStats};
+use crate::models::request_log::RequestLogOut;
 use crate::state::RuntimeMetrics;
 
 const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
@@ -11,6 +12,7 @@ const LOG_WRITE_MAX_ATTEMPTS: usize = 5;
 const LOG_WRITE_RETRY_BASE_DELAY_MS: u64 = 50;
 const LOG_WRITE_BATCH_SIZE: usize = 20;
 const LOG_WRITE_BATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+const LOG_EVENT_CHANNEL_CAPACITY: usize = 1_024;
 const CLEANUP_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(120);
 const LOG_BODY_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 const LOG_RETENTION_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
@@ -56,6 +58,26 @@ pub struct LogEntry {
 pub struct LogWriter {
     sender: mpsc::Sender<LogEntry>,
     metrics: Arc<RuntimeMetrics>,
+    events: broadcast::Sender<LogStreamEvent>,
+}
+
+/// A committed request-log row became available to the admin console.
+///
+/// The database remains the source of truth for pagination and details. The
+/// event only carries the lightweight list row, without request/response bodies.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LogStreamEvent {
+    pub log: RequestLogOut,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_rpm: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_tpm: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct PersistedLogRecord {
+    stats: PersistedLogStats,
+    event: LogStreamEvent,
 }
 
 impl LogWriter {
@@ -74,6 +96,11 @@ impl LogWriter {
                 tracing::error!("request log writer stopped; dropping request log");
             }
         }
+    }
+
+    /// Subscribe to notifications for rows that have committed successfully.
+    pub fn subscribe_log_events(&self) -> broadcast::Receiver<LogStreamEvent> {
+        self.events.subscribe()
     }
 }
 
@@ -463,6 +490,7 @@ mod tests {
         let metrics = Arc::new(RuntimeMetrics::new());
         let log_stats = Arc::new(crate::db::log_stats::LogStatsCache::empty());
         let writer = spawn_log_writer(pool.clone(), metrics.clone(), log_stats.clone(), 16);
+        let mut events = writer.subscribe_log_events();
         for path in ["/v1/responses", "/v1/chat/completions"] {
             schedule_log(
                 &writer,
@@ -506,6 +534,56 @@ mod tests {
         let log_stats_snapshot = log_stats.snapshot();
         assert_eq!(log_stats_snapshot.total_log_count, 2);
         assert_eq!(log_stats_snapshot.log_count_24h, 2);
+
+        let first = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!([first.log.id, second.log.id], [1, 2]);
+        assert_eq!(first.log.method, "POST");
+        assert_eq!(first.log.path, "/v1/responses");
+        assert_eq!(first.recent_rpm, Some(2));
+        assert_eq!(first.recent_tpm, Some(0));
+    }
+
+    #[tokio::test]
+    async fn log_writer_does_not_publish_an_event_when_the_batch_rolls_back() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_request_logs_table(&pool).await;
+
+        let metrics = Arc::new(RuntimeMetrics::new());
+        let log_stats = Arc::new(crate::db::log_stats::LogStatsCache::empty());
+        let writer = spawn_log_writer(pool, metrics.clone(), log_stats, 16);
+        let mut events = writer.subscribe_log_events();
+        schedule_log(
+            &writer,
+            LogEntry {
+                method: "POST".to_string(),
+                path: "/v1/responses".to_string(),
+                ..LogEntry::default()
+            },
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while metrics.snapshot().log_write_failures_total == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
     }
 
     #[tokio::test]
@@ -638,8 +716,19 @@ pub fn spawn_log_writer(
     queue_capacity: usize,
 ) -> LogWriter {
     let (sender, receiver) = mpsc::channel(queue_capacity.max(1));
-    tokio::spawn(log_writer_loop(pool, metrics.clone(), log_stats, receiver));
-    LogWriter { sender, metrics }
+    let (events, _) = broadcast::channel(LOG_EVENT_CHANNEL_CAPACITY);
+    tokio::spawn(log_writer_loop(
+        pool,
+        metrics.clone(),
+        log_stats,
+        events.clone(),
+        receiver,
+    ));
+    LogWriter {
+        sender,
+        metrics,
+        events,
+    }
 }
 
 /// Queue a log entry for the shared background writer.
@@ -651,6 +740,7 @@ async fn log_writer_loop(
     pool: sqlx::SqlitePool,
     metrics: Arc<RuntimeMetrics>,
     log_stats: Arc<LogStatsCache>,
+    events: broadcast::Sender<LogStreamEvent>,
     mut receiver: mpsc::Receiver<LogEntry>,
 ) {
     let mut batch = Vec::with_capacity(LOG_WRITE_BATCH_SIZE);
@@ -685,9 +775,35 @@ async fn log_writer_loop(
 
         let started_at = std::time::Instant::now();
         match insert_log_batch_with_retry(&pool, &entries).await {
-            Ok(persisted_entries) => {
+            Ok(persisted_records) => {
                 metrics.record_log_written(entry_count);
-                log_stats.record_persisted_entries(&persisted_entries);
+                let persisted_stats: Vec<PersistedLogStats> = persisted_records
+                    .iter()
+                    .map(|record| record.stats)
+                    .collect();
+                log_stats.record_persisted_entries(&persisted_stats);
+                let recent_rate =
+                    match crate::db::log_stats::recent_one_minute_log_rate(&pool).await {
+                        Ok(rate) => Some(rate),
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                "failed to calculate recent log rate for live log event"
+                            );
+                            None
+                        }
+                    };
+                for record in persisted_records {
+                    // `insert_log_batch_with_retry` only returns after its SQLite
+                    // transaction commits. Never publish from `schedule`, or a
+                    // dropped/rolled-back row could appear in the live console.
+                    let mut event = record.event;
+                    if let Some(rate) = recent_rate {
+                        event.recent_rpm = Some(rate.request_count);
+                        event.recent_tpm = Some(rate.total_tokens);
+                    }
+                    let _ = events.send(event);
+                }
             }
             Err(error) => {
                 metrics.record_log_write_failure_count(entry_count);
@@ -707,7 +823,7 @@ async fn log_writer_loop(
 async fn insert_log_batch_with_retry(
     pool: &sqlx::SqlitePool,
     entries: &[LogEntry],
-) -> Result<Vec<PersistedLogStats>, crate::error::AppError> {
+) -> Result<Vec<PersistedLogRecord>, crate::error::AppError> {
     if entries.is_empty() {
         return Ok(Vec::new());
     }
@@ -747,12 +863,19 @@ async fn insert_log_entry(
 async fn insert_log_batch(
     pool: &sqlx::SqlitePool,
     entries: &[LogEntry],
-) -> Result<Vec<PersistedLogStats>, crate::error::AppError> {
+) -> Result<Vec<PersistedLogRecord>, crate::error::AppError> {
     let mut transaction = pool.begin().await?;
-    let mut persisted_entries = Vec::with_capacity(entries.len());
+    let mut persisted_records = Vec::with_capacity(entries.len());
 
     for entry in entries {
-        let stream_int: i64 = if entry.stream { 1 } else { 0 };
+        let now = chrono::Utc::now();
+        let created_at = now.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
+        let stream_int: i32 = if entry.stream { 1 } else { 0 };
+        let client_type = entry
+            .client_type
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
         let request_payload = encode_snapshot_pair(
             entry.downstream_request.clone(),
             entry.upstream_request.clone(),
@@ -770,14 +893,13 @@ async fn insert_log_batch(
              prompt_tokens, completion_tokens, total_tokens,
              prompt_cached_tokens, cache_creation_tokens, completion_reasoning_tokens,
              duration_ms, first_token_ms, error, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                datetime('now'))"#,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&entry.method)
         .bind(&entry.path)
         .bind(entry.downstream_token_id)
         .bind(&entry.downstream_token_name)
-        .bind(entry.client_type.as_deref().unwrap_or("unknown"))
+        .bind(&client_type)
         .bind(entry.upstream_id)
         .bind(&entry.upstream_name)
         .bind(&entry.model)
@@ -796,6 +918,7 @@ async fn insert_log_batch(
         .bind(entry.duration_ms)
         .bind(entry.first_token_ms)
         .bind(&entry.error)
+        .bind(&created_at)
         .execute(&mut *transaction)
         .await?;
         let log_id = result.last_insert_rowid();
@@ -826,18 +949,51 @@ async fn insert_log_batch(
         .execute(&mut *transaction)
         .await?;
 
-        persisted_entries.push(PersistedLogStats {
-            id: log_id,
-            created_at_unix_seconds: chrono::Utc::now().timestamp(),
-            total_tokens: entry.total_tokens.map(i64::from),
-            prompt_tokens: entry.prompt_tokens.map(i64::from),
-            prompt_cached_tokens: entry.prompt_cached_tokens.map(i64::from),
+        persisted_records.push(PersistedLogRecord {
+            stats: PersistedLogStats {
+                id: log_id,
+                created_at_unix_seconds: now.timestamp(),
+                total_tokens: entry.total_tokens.map(i64::from),
+                prompt_tokens: entry.prompt_tokens.map(i64::from),
+                prompt_cached_tokens: entry.prompt_cached_tokens.map(i64::from),
+            },
+            event: LogStreamEvent {
+                log: RequestLogOut {
+                    id: log_id,
+                    created_at,
+                    method: entry.method.clone(),
+                    path: entry.path.clone(),
+                    downstream_token_id: entry.downstream_token_id,
+                    downstream_token_name: entry.downstream_token_name.clone(),
+                    client_type,
+                    upstream_id: entry.upstream_id,
+                    upstream_name: entry.upstream_name.clone(),
+                    model: entry.model.clone(),
+                    request_model: entry.request_model.clone(),
+                    upstream_model: entry.upstream_model.clone(),
+                    reasoning_effort: entry.reasoning_effort.clone(),
+                    response_reasoning_effort: entry.response_reasoning_effort.clone(),
+                    stream: stream_int,
+                    status_code: entry.status_code,
+                    prompt_tokens: entry.prompt_tokens,
+                    completion_tokens: entry.completion_tokens,
+                    total_tokens: entry.total_tokens,
+                    prompt_cached_tokens: entry.prompt_cached_tokens,
+                    cache_creation_tokens: entry.cache_creation_tokens,
+                    completion_reasoning_tokens: entry.completion_reasoning_tokens,
+                    duration_ms: entry.duration_ms,
+                    first_token_ms: entry.first_token_ms,
+                    error: entry.error.clone(),
+                },
+                recent_rpm: None,
+                recent_tpm: None,
+            },
         });
     }
 
     transaction.commit().await?;
 
-    Ok(persisted_entries)
+    Ok(persisted_records)
 }
 
 // ── Background cleanup ──────────────────────────────────────────────────────

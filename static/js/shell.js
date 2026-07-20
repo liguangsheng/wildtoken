@@ -314,8 +314,10 @@ function switchView(name) {
   if (name === "logs") {
     loadLogs();
     startLogRefresh();
+    startLogStream();
   } else {
     stopLogRefresh();
+    stopLogStream();
   }
   if (name === "upstreams") {
     loadUpstreams();
@@ -342,14 +344,24 @@ function switchView(name) {
 function updateLiveIndicator() {
   if (!liveIndicator) return;
   const active = Boolean(
-    logRefreshTimer || upstreamRefreshTimer || tokenRefreshTimer || dashboardRefreshTimer,
+    logRefreshTimer
+      || logStreamController
+      || logStreamReconnectTimer
+      || upstreamRefreshTimer
+      || tokenRefreshTimer
+      || dashboardRefreshTimer,
   );
   liveIndicator.hidden = !active || !pageVisible;
 }
 
 function startLogRefresh() {
   const interval = getLogRefreshMs();
-  if (logRefreshTimer !== null || !pageVisible || interval === 0) {
+  if (
+    logRefreshTimer !== null
+    || !pageVisible
+    || interval === 0
+    || logStreamController !== null
+  ) {
     updateLiveIndicator();
     return;
   }
@@ -422,6 +434,7 @@ function stopDashboardRefresh() {
 
 function pauseAllAutoRefresh() {
   stopLogRefresh();
+  stopLogStream();
   stopUpstreamRefresh();
   stopTokenRefresh();
   stopHealthTick();
@@ -440,6 +453,7 @@ function resumeAutoRefreshForCurrentView() {
     startDashboardRefresh();
   } else if (name === "logs") {
     startLogRefresh();
+    startLogStream();
   } else if (name === "upstreams") {
     startUpstreamRefresh();
     startHealthTick();

@@ -788,6 +788,32 @@ html[data-theme="light"] .theme-toggle-icon::before {
   width: 34px;
 }
 
+.log-new-entries-notice {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 8px 10px;
+}
+
+.log-new-entries-notice[hidden] {
+  display: none;
+}
+
+.log-new-entries-notice p {
+  color: var(--muted-strong);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.log-new-entries-notice button {
+  flex: 0 0 auto;
+}
+
 .log-sensitive-toggle svg {
   fill: none;
   height: 17px;
