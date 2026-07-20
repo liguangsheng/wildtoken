@@ -428,8 +428,12 @@ td.no-match-state {
   min-width: 110px;
 }
 
-.col-priority {
-  min-width: 80px;
+.upstream-table [data-col="priority"] {
+  min-width: 104px;
+}
+
+.upstream-table th[data-col="priority"] .table-sort-button {
+  white-space: nowrap;
 }
 
 .col-weight {

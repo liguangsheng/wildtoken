@@ -11,6 +11,10 @@ use crate::state::RuntimeMetrics;
 const LOG_BODY_CLEANUP_BATCH_SIZE: i64 = 8;
 const LOG_BODY_CLEANUP_BATCH_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
 const SLOW_DB_OPERATION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+// Prefer the model actually sent to the upstream. `model` is retained as a
+// compatibility fallback for logs written before `upstream_model` was added.
+const ACTUAL_MODEL_EXPRESSION: &str =
+    "COALESCE(NULLIF(TRIM(upstream_model), ''), NULLIF(TRIM(model), ''))";
 
 // ── Internal query types (to avoid exceeding sqlx tuple limit) ──────────────
 
@@ -363,9 +367,10 @@ pub async fn top_log_stats(
         pool,
         window,
         TopLogCountSpec {
-            name_expression: "TRIM(COALESCE(request_model, model))",
-            group_expression: "TRIM(COALESCE(request_model, model))",
-            source_filter: "COALESCE(request_model, model) IS NOT NULL AND TRIM(COALESCE(request_model, model)) <> ''",
+            name_expression: ACTUAL_MODEL_EXPRESSION,
+            group_expression: ACTUAL_MODEL_EXPRESSION,
+            source_filter:
+                "COALESCE(NULLIF(TRIM(upstream_model), ''), NULLIF(TRIM(model), '')) IS NOT NULL",
             metric_expression: "1",
             metric_filter: None,
         },
@@ -395,9 +400,10 @@ pub async fn top_log_stats(
         pool,
         window,
         TopLogCountSpec {
-            name_expression: "TRIM(COALESCE(request_model, model))",
-            group_expression: "TRIM(COALESCE(request_model, model))",
-            source_filter: "COALESCE(request_model, model) IS NOT NULL AND TRIM(COALESCE(request_model, model)) <> ''",
+            name_expression: ACTUAL_MODEL_EXPRESSION,
+            group_expression: ACTUAL_MODEL_EXPRESSION,
+            source_filter:
+                "COALESCE(NULLIF(TRIM(upstream_model), ''), NULLIF(TRIM(model), '')) IS NOT NULL",
             metric_expression: "COALESCE(total_tokens, 0)",
             metric_filter: Some("total_tokens IS NOT NULL AND total_tokens > 0"),
         },
@@ -1110,6 +1116,57 @@ mod tests {
                 .map(|item| (item.name.as_str(), item.count))
                 .collect::<Vec<_>>(),
             [("gpt-5", 2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn top_log_stats_group_models_by_actual_upstream_model() {
+        let pool = test_pool().await;
+        sqlx::query(
+            r#"INSERT INTO request_logs
+               (id, created_at, model, request_model, upstream_model, total_tokens)
+               VALUES
+               -- Two public aliases resolved to the same upstream model.
+               (1, datetime('now'), 'provider-a', 'public-a', 'real-provider', 100),
+               (2, datetime('now'), 'provider-b', 'public-b', 'real-provider', 200),
+               -- Pre-upstream_model logs retain their effective model in `model`.
+               (3, datetime('now'), 'legacy-provider', 'legacy-public', NULL, 60),
+               -- A request that never reached an upstream must not be labeled as real.
+               (4, datetime('now'), NULL, 'request-only', NULL, 40),
+               -- Empty upstream values use the legacy effective-model fallback.
+               (5, datetime('now'), 'legacy-whitespace', 'another-public', '   ', 20)"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let stats = top_log_stats(&pool, LogTopWindow::ThreeDays, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            stats
+                .models
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [
+                ("real-provider", 2),
+                ("legacy-provider", 1),
+                ("legacy-whitespace", 1),
+            ]
+        );
+        assert_eq!(
+            stats
+                .model_tokens
+                .iter()
+                .map(|item| (item.name.as_str(), item.count))
+                .collect::<Vec<_>>(),
+            [
+                ("real-provider", 300),
+                ("legacy-provider", 60),
+                ("legacy-whitespace", 20),
+            ]
         );
     }
 
