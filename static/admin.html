@@ -545,7 +545,7 @@
             <h2 id="form-title">新增渠道</h2>
             <p>配置路由可用的上游渠道。</p>
           </div>
-          <button id="upstream-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="upstream-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <input id="upstream-id" type="hidden" />
 
@@ -693,7 +693,7 @@
             <h2>快速导入</h2>
             <p>粘贴含 Base URL 与 API Key 的文本。导入时会自动拉取并填入全部模型，优先级默认设为 999。</p>
           </div>
-          <button id="quick-import-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="quick-import-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <label class="field">
           <span class="field-label">粘贴文本</span>
@@ -725,7 +725,7 @@
             <h2 id="model-dialog-title">选择模型</h2>
             <p id="model-dialog-summary"></p>
           </div>
-          <button id="model-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="model-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <div class="model-toolbar">
           <label class="field">
@@ -765,7 +765,7 @@
             <h2 id="log-detail-title">请求详情</h2>
             <p id="log-detail-summary"></p>
           </div>
-          <button id="log-detail-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="log-detail-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <div id="log-detail-meta" class="log-detail-meta" aria-live="polite"></div>
         <div class="log-detail-sections-head">
@@ -837,7 +837,7 @@
             <h2 id="balance-title">余额查询</h2>
             <p id="balance-summary"></p>
           </div>
-          <button id="balance-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="balance-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <div id="balance-body" class="balance-body"></div>
       </div>
@@ -885,7 +885,7 @@
       <form id="model-test-form" class="upstream-dialog-panel">
         <div class="modal-head upstream-modal-head">
           <div><h2 id="model-test-title">测试模型</h2><p id="model-test-summary">向当前渠道发送一次实际模型请求。</p></div>
-          <button id="model-test-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="model-test-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <div class="upstream-dialog-body">
           <label class="field"><span class="field-label">模型</span><select id="model-test-model" required></select><span class="field-hint">可使用此渠道配置的模型，或从上游刷新后选择。</span></label>
@@ -904,7 +904,7 @@
     </dialog>
     <dialog id="model-test-template-dialog" class="confirm-dialog" aria-labelledby="model-test-template-title">
       <form id="model-test-template-form" class="confirm-panel">
-        <div class="modal-head"><div><h2 id="model-test-template-title">新增测试模板</h2><p>提示词会作为实际测试请求的一部分发送给渠道。</p></div><button id="model-test-template-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
+        <div class="modal-head"><div><h2 id="model-test-template-title">新增测试模板</h2><p>提示词会作为实际测试请求的一部分发送给渠道。</p></div><div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="model-test-template-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div></div>
         <input id="model-test-template-id" type="hidden" />
         <div class="form-grid">
           <label class="field span-2"><span class="field-label">模板名称</span><input id="model-test-template-name" maxlength="80" required placeholder="例如：简短中文响应" /></label>
@@ -921,7 +921,7 @@
             <h2 id="token-form-title">新增令牌</h2>
             <p>创建下游 API 访问令牌。</p>
           </div>
-          <button id="token-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="token-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <input id="token-id" type="hidden" />
         <div class="upstream-dialog-body">
@@ -971,7 +971,7 @@
             <h2 id="confirm-title">确认操作</h2>
             <p id="confirm-message"></p>
           </div>
-          <button id="confirm-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+          <div class="modal-head-actions"><button type="button" class="secondary ghost icon-maximize" data-dialog-maximize aria-label="最大化" title="最大化" aria-pressed="false"><span aria-hidden="true">▢</span></button><button id="confirm-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button></div>
         </div>
         <div class="modal-actions confirm-actions">
           <button id="confirm-cancel" type="button" class="secondary">取消</button>

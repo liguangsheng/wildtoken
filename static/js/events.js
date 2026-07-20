@@ -688,6 +688,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// Dialog maximize / restore (shared chrome next to close buttons).
+document.addEventListener("click", (event) => {
+  const button = event.target?.closest?.("[data-dialog-maximize]");
+  if (!button) return;
+  const dialog = button.closest("dialog");
+  if (!dialog) return;
+  event.preventDefault();
+  toggleDialogMaximized(dialog);
+});
+
 // Start only after every classic script has registered its globals and listeners.
 if (getAdminToken()) {
   initApp();

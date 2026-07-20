@@ -169,6 +169,7 @@ function openTokenDialog(mode = "new") {
 }
 
 function closeTokenDialog() {
+  clearDialogMaximized(tokenDialog);
   if (tokenDialog.open && typeof tokenDialog.close === "function") {
     tokenDialog.close();
   } else {

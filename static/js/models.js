@@ -178,6 +178,7 @@ function openModelDialog(upstream, models, selectedNames, mode, options = {}) {
 }
 
 function closeModelDialog() {
+  clearDialogMaximized(modelDialog);
   if (modelDialog.open && typeof modelDialog.close === "function") {
     modelDialog.close();
   } else {

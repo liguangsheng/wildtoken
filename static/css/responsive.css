@@ -431,11 +431,17 @@
 
   .request-detail-grid pre {
     font-size: 11px;
-    max-height: 48dvh;
+    /* Stay in the panel scroll by default; only focused mode nests a scrollbar. */
+    max-height: none;
     min-height: 160px;
     padding: 10px;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .request-detail-grid.is-focused pre {
+    max-height: min(56dvh, 420px);
+    min-height: min(40dvh, 280px);
   }
 
   .balance-row {

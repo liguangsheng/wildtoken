@@ -44,7 +44,7 @@ html[data-density="compact"] .summary-strip strong {
   font-size: var(--text-md);
 }
 
-html[data-density="compact"] button:not(.status-switch):not(.toast-close):not(.icon-close):not(.action-menu-trigger):not(.priority-value):not(.token-preview-button):not(.url-action):not(.model-selection-remove) {
+html[data-density="compact"] button:not(.status-switch):not(.toast-close):not(.icon-close):not(.icon-maximize):not(.action-menu-trigger):not(.priority-value):not(.token-preview-button):not(.url-action):not(.model-selection-remove) {
   min-height: 28px;
   padding-top: 0;
   padding-bottom: 0;

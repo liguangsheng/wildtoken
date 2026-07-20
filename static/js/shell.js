@@ -18,6 +18,34 @@ function topOpenDialog() {
   return dialogs.length ? dialogs[dialogs.length - 1] : null;
 }
 
+function dialogMaximizeButton(dialog) {
+  return dialog?.querySelector?.("[data-dialog-maximize]") || null;
+}
+
+function setDialogMaximized(dialog, maximized) {
+  if (!dialog) return false;
+  const next = Boolean(maximized);
+  dialog.classList.toggle("is-maximized", next);
+  const button = dialogMaximizeButton(dialog);
+  if (button) {
+    button.setAttribute("aria-pressed", String(next));
+    button.setAttribute("aria-label", next ? "还原" : "最大化");
+    button.title = next ? "还原" : "最大化";
+    const glyph = button.querySelector("span");
+    if (glyph) glyph.textContent = next ? "❐" : "▢";
+  }
+  return next;
+}
+
+function clearDialogMaximized(dialog) {
+  return setDialogMaximized(dialog, false);
+}
+
+function toggleDialogMaximized(dialog) {
+  if (!dialog) return false;
+  return setDialogMaximized(dialog, !dialog.classList.contains("is-maximized"));
+}
+
 function closeDialogElement(dialog) {
   if (!dialog) return false;
   if (dialog === commandPalette) {
@@ -49,6 +77,7 @@ function closeDialogElement(dialog) {
     return true;
   }
   if (dialog === confirmDialog) {
+    clearDialogMaximized(confirmDialog);
     if (typeof confirmDialog.close === "function") {
       confirmDialog.close();
     } else {
@@ -59,6 +88,7 @@ function closeDialogElement(dialog) {
   if (dialog === adminTokenDialog) {
     return false;
   }
+  clearDialogMaximized(dialog);
   if (typeof dialog.close === "function") {
     dialog.close();
   } else {
@@ -733,6 +763,7 @@ function renderModelTestTemplates() {
 
 function closeModelTestDialog() {
   modelTestUpstream = null;
+  clearDialogMaximized(modelTestDialog);
   if (modelTestDialog.open && typeof modelTestDialog.close === "function") modelTestDialog.close();
   else modelTestDialog.removeAttribute("open");
 }
@@ -843,6 +874,7 @@ function openModelTestTemplateDialog(template = null) {
 }
 
 function closeModelTestTemplateDialog() {
+  clearDialogMaximized(modelTestTemplateDialog);
   if (modelTestTemplateDialog.open && typeof modelTestTemplateDialog.close === "function") modelTestTemplateDialog.close();
   else modelTestTemplateDialog.removeAttribute("open");
 }

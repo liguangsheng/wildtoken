@@ -118,6 +118,7 @@ function openUpstreamDialog() {
 }
 
 function closeUpstreamDialog() {
+  clearDialogMaximized(upstreamDialog);
   if (upstreamDialog.open && typeof upstreamDialog.close === "function") {
     upstreamDialog.close();
   } else {
@@ -218,6 +219,7 @@ function cancelQuickImportFetch() {
 
 function closeQuickImportDialog() {
   cancelQuickImportFetch();
+  clearDialogMaximized(quickImportDialog);
   if (quickImportDialog.open && typeof quickImportDialog.close === "function") {
     quickImportDialog.close();
   } else {
@@ -280,6 +282,7 @@ function openBalanceDialog() {
 }
 
 function closeBalanceDialog() {
+  clearDialogMaximized(balanceDialog);
   if (balanceDialog.open && typeof balanceDialog.close === "function") {
     balanceDialog.close();
   } else {

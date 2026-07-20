@@ -456,6 +456,11 @@ function requestConfirm({
       confirmDialog.removeEventListener("pointerdown", onPointerDown);
       confirmDialog.removeEventListener("pointercancel", onPointerCancel);
       confirmDialog.removeEventListener("click", onBackdrop);
+      if (typeof clearDialogMaximized === "function") {
+        clearDialogMaximized(confirmDialog);
+      } else {
+        confirmDialog.classList.remove("is-maximized");
+      }
       if (confirmDialog.open && typeof confirmDialog.close === "function") {
         confirmDialog.close();
       } else {

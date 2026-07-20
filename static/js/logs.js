@@ -1459,6 +1459,7 @@ function closeLogDetailDialog() {
     button.textContent = "放大查看";
     button.setAttribute("aria-pressed", "false");
   }
+  clearDialogMaximized(logDetailDialog);
   if (logDetailDialog.open && typeof logDetailDialog.close === "function") {
     logDetailDialog.close();
   } else {

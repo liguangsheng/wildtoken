@@ -229,7 +229,9 @@ html[data-theme="animal-island"] .url-action,
 html[data-theme="animal-island"] .priority-value,
 html[data-theme="animal-island"] .token-preview-button,
 html[data-theme="animal-island"] .model-selection-remove,
-html[data-theme="animal-island"] .toast-close {
+html[data-theme="animal-island"] .toast-close,
+html[data-theme="animal-island"] .icon-close,
+html[data-theme="animal-island"] .icon-maximize {
   background: transparent;
   border-color: transparent;
   border-radius: var(--radius-sm);
@@ -256,7 +258,9 @@ html[data-theme="animal-island"] .table-sort-button:focus-visible span {
 html[data-theme="animal-island"] .url-action:hover,
 html[data-theme="animal-island"] .token-preview-button:hover,
 html[data-theme="animal-island"] .model-selection-remove:hover,
-html[data-theme="animal-island"] .toast-close:hover {
+html[data-theme="animal-island"] .toast-close:hover,
+html[data-theme="animal-island"] .icon-close:hover,
+html[data-theme="animal-island"] .icon-maximize:hover {
   background: var(--panel-muted);
   box-shadow: none;
   transform: none;

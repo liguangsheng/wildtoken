@@ -426,15 +426,15 @@
   font-size: 12px;
   line-height: 1.55;
   margin: 0;
-  max-height: 620px;
+  /* Default: flow into the panel scroll (no nested scrollbar). */
+  max-height: none;
   min-height: 220px;
-  overflow: auto;
+  overflow: visible;
   overflow-wrap: anywhere;
   padding: 12px;
   tab-size: 2;
   white-space: pre-wrap;
   word-break: break-word;
-  -webkit-overflow-scrolling: touch;
 }
 
 .request-detail-grid.is-focused {
@@ -445,9 +445,13 @@
   display: none;
 }
 
+/* Focused/expanded view: only the code block scrolls. */
 .request-detail-grid.is-focused pre {
   max-height: min(72dvh, 760px);
   min-height: min(56dvh, 480px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .request-detail-grid pre:empty::before {
