@@ -85,6 +85,57 @@ html[data-theme="cyberpunk"] .app-shell {
     background: radial-gradient(ellipse 90% 80% at 50% 40%, transparent 50%, rgb(0 0 0 / 40%) 100%);
     opacity: 0.55;
   }
+
+  html[data-theme="cyberpunk"] .brand-mark,
+  html[data-theme="cyberpunk"] .topbar-brand h1 {
+    animation: none !important;
+  }
+
+  html[data-theme="cyberpunk"] .live-dot,
+  html[data-theme="cyberpunk"] .stream-state-dot {
+    animation: none !important;
+  }
+}
+
+/* ── Selection / native form accents ────────────────────────
+   Native browser widgets (text selection, checkboxes) default
+   to OS colors that clash hard with the neon HUD — recolor them. */
+
+html[data-theme="cyberpunk"] ::selection {
+  background: rgb(255 47 220 / 55%);
+  color: #ffffff;
+  text-shadow: none;
+}
+
+html[data-theme="cyberpunk"] input[type="checkbox"] {
+  accent-color: #ff2fdc;
+}
+
+/* Idle neon instability — subtle glow breathing, never full flicker */
+@keyframes cyberpunk-neon-breathe {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0 6px rgb(255 47 220 / 85%))
+      drop-shadow(0 0 14px rgb(255 47 220 / 45%));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 9px rgb(255 47 220 / 100%))
+      drop-shadow(0 0 20px rgb(255 47 220 / 60%));
+  }
+}
+
+@keyframes cyberpunk-text-breathe {
+  0%, 100% {
+    text-shadow:
+      0 0 8px rgb(255 47 220 / 45%),
+      0 0 18px rgb(255 47 220 / 22%);
+  }
+  50% {
+    text-shadow:
+      0 0 11px rgb(255 47 220 / 60%),
+      0 0 24px rgb(255 47 220 / 32%);
+  }
 }
 
 /* ── Chrome ──────────────────────────────────────────────── */
@@ -141,6 +192,7 @@ html[data-theme="cyberpunk"] .topbar-brand {
 }
 
 html[data-theme="cyberpunk"] .brand-mark {
+  animation: cyberpunk-neon-breathe 4s ease-in-out infinite;
   color: #ff2fdc;
   filter:
     drop-shadow(0 0 6px rgb(255 47 220 / 85%))
@@ -148,6 +200,7 @@ html[data-theme="cyberpunk"] .brand-mark {
 }
 
 html[data-theme="cyberpunk"] .topbar-brand h1 {
+  animation: cyberpunk-text-breathe 4s ease-in-out infinite;
   color: #f8f0ff;
   font-family: "Orbitron", var(--font-sans);
   font-size: 13px;
@@ -848,8 +901,21 @@ html[data-theme="cyberpunk"] .dashboard-rank-fill {
 
 html[data-theme="cyberpunk"] .live-dot,
 html[data-theme="cyberpunk"] .stream-state-dot {
+  animation: cyberpunk-live-pulse 1.6s ease-in-out infinite;
   border-radius: var(--radius-full);
   box-shadow: 0 0 0 2px rgb(57 255 20 / 30%), 0 0 10px rgb(57 255 20 / 50%);
+}
+
+/* Recolor the shared live-pulse keyframe (enhancements.css hardcodes teal) to theme cyan */
+@keyframes cyberpunk-live-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgb(57 255 20 / 30%), 0 0 0 0 rgb(0 245 255 / 0%);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgb(57 255 20 / 30%), 0 0 0 5px rgb(0 245 255 / 35%);
+    opacity: 0.85;
+  }
 }
 
 html[data-theme="cyberpunk"] .badge,

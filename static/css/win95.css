@@ -24,6 +24,17 @@ html[data-theme="win95"] .aurora {
   display: none;
 }
 
+/* Native widgets (text selection, checkboxes) default to OS colors —
+   recolor to the classic Win95 navy so they read as part of the chrome. */
+html[data-theme="win95"] ::selection {
+  background: #000080;
+  color: #ffffff;
+}
+
+html[data-theme="win95"] input[type="checkbox"] {
+  accent-color: #000080;
+}
+
 html[data-theme="win95"] body {
   background: var(--bg);
   -webkit-font-smoothing: auto;
@@ -145,7 +156,8 @@ html[data-theme="win95"] .url-action,
 html[data-theme="win95"] .priority-value,
 html[data-theme="win95"] .token-preview-button,
 html[data-theme="win95"] .model-selection-remove,
-html[data-theme="win95"] .toast-close {
+html[data-theme="win95"] .toast-close,
+html[data-theme="win95"] .action-menu-trigger {
   background: transparent;
   border-color: transparent;
   box-shadow: none;

@@ -74,6 +74,20 @@ html[data-theme="nes"] .app-shell {
   }
 }
 
+/* ── Selection / native form accents ────────────────────────
+   Native browser widgets (text selection, checkboxes) default
+   to OS colors — recolor them hard-edged, NES-palette style. */
+
+html[data-theme="nes"] ::selection {
+  background: #e52521;
+  color: #ffffff;
+  text-shadow: none;
+}
+
+html[data-theme="nes"] input[type="checkbox"] {
+  accent-color: #e52521;
+}
+
 /* ── Chrome: game title bar ──────────────────────────────── */
 
 html[data-theme="nes"] .topbar {
@@ -114,6 +128,12 @@ html[data-theme="nes"] .brand-mark {
   filter: none;
   height: 18px;
   width: 18px;
+}
+
+/* Kill anti-aliasing on the logo vector for a hard pixel-cut edge */
+html[data-theme="nes"] .brand-mark svg,
+html[data-theme="nes"] .brand-mark svg * {
+  shape-rendering: crispEdges;
 }
 
 html[data-theme="nes"] .topbar-brand h1 {
@@ -708,9 +728,20 @@ html[data-theme="nes"] .dashboard-rank-fill {
 
 html[data-theme="nes"] .live-dot,
 html[data-theme="nes"] .stream-state-dot {
+  animation: nes-live-blink 1s steps(1) infinite;
   border: 2px solid #000000;
   border-radius: 0;
   box-shadow: 1px 1px 0 #000000;
+}
+
+/* Hard on/off blink (no easing) instead of the shared smooth pulse — 8-bit "1UP" feel */
+@keyframes nes-live-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0.3;
+  }
 }
 
 html[data-theme="nes"] .badge,
