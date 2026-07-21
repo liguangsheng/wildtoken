@@ -515,7 +515,7 @@
               </section>
 
               <section class="settings-card" aria-labelledby="model-test-templates-title">
-                <div class="settings-card-head"><div><h3 id="model-test-templates-title">模型测试请求包装</h3><p>Codex / OpenCode 包装决定接口协议和请求头；Prompt 在测试窗口中独立选择。</p></div><button id="new-model-test-template" type="button" class="secondary">新增包装</button></div>
+                <div class="settings-card-head"><div><h3 id="model-test-templates-title">模型测试请求包装</h3><p>codex-tui / opencode / claude-cli 包装决定接口协议和请求头；Prompt 在测试窗口中独立选择。</p></div><button id="new-model-test-template" type="button" class="secondary">新增包装</button></div>
                 <div id="model-test-template-list" class="model-test-template-list" aria-live="polite"><p class="settings-loading">进入设置页后加载模板。</p></div>
               </section>
 
@@ -908,7 +908,7 @@
         <input id="model-test-template-id" type="hidden" />
         <div class="form-grid">
           <label class="field span-2"><span class="field-label">模板名称</span><input id="model-test-template-name" maxlength="80" required placeholder="例如：简短中文响应" /></label>
-          <label class="field span-2"><span class="field-label">接口类型</span><select id="model-test-template-kind"><option value="responses">Responses（Codex）</option><option value="chat_completions">Chat Completions（OpenCode）</option></select></label>
+          <label class="field span-2"><span class="field-label">接口类型</span><select id="model-test-template-kind"><option value="responses">Responses（codex-tui）</option><option value="chat_completions">Chat Completions（opencode）</option><option value="messages">Messages（claude-cli）</option></select></label>
           <label class="field span-2"><span class="field-label">提示词</span><textarea id="model-test-template-prompt" rows="6" maxlength="20000" required></textarea></label>
         </div>
         <div class="modal-actions"><button id="model-test-template-cancel" type="button" class="secondary">取消</button><button type="submit">保存模板</button></div>

@@ -57,6 +57,17 @@ fn extract_model_test_reply(payload: &serde_json::Value) -> Option<String> {
     {
         return Some(content.to_owned());
     }
+    if let Some(content) = payload.get("content").and_then(serde_json::Value::as_array) {
+        let text = content
+            .iter()
+            .filter(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+            .filter_map(|item| item.get("text")?.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
     let output = payload.get("output")?.as_array()?;
     let text = output
         .iter()
@@ -86,6 +97,31 @@ fn codex_model_test_headers() -> HashMap<String, String> {
         ("x-codex-window-id".into(), format!("{request_id}:0")),
     ]);
     headers
+}
+
+fn claude_cli_model_test_headers() -> HashMap<String, String> {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    let session_id = URL_SAFE_NO_PAD.encode(bytes);
+    HashMap::from([
+        ("accept".into(), "application/json".into()),
+        ("accept-encoding".into(), "identity".into()),
+        ("anthropic-beta".into(), "claude-code-20250219,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,effort-2025-11-24".into()),
+        ("anthropic-dangerous-direct-browser-access".into(), "true".into()),
+        ("anthropic-version".into(), "2023-06-01".into()),
+        ("content-type".into(), "application/json".into()),
+        ("user-agent".into(), "claude-cli/2.1.216 (external, cli)".into()),
+        ("x-app".into(), "cli".into()),
+        ("x-claude-code-session-id".into(), session_id),
+        ("x-stainless-arch".into(), "x64".into()),
+        ("x-stainless-lang".into(), "js".into()),
+        ("x-stainless-os".into(), "Linux".into()),
+        ("x-stainless-package-version".into(), "0.94.0".into()),
+        ("x-stainless-retry-count".into(), "0".into()),
+        ("x-stainless-runtime".into(), "node".into()),
+        ("x-stainless-runtime-version".into(), "v26.3.0".into()),
+        ("x-stainless-timeout".into(), "600".into()),
+    ])
 }
 
 fn extract_model_ids(payload: &serde_json::Value) -> Vec<String> {
@@ -483,13 +519,20 @@ pub async fn admin_test_upstream_model(
     let target_path = match template.request_kind.as_str() {
         "responses" => "responses",
         "chat_completions" => "chat/completions",
+        "messages" => "messages",
         _ => {
             return Err(AppError::BadRequest(
                 "unsupported template request kind".into(),
             ))
         }
     };
-    let target_url = build_url(&row.base_url, target_path, "");
+    // Claude Code CLI appends this query parameter on every /v1/messages call.
+    let target_query = if template.request_kind == "messages" {
+        "beta=true"
+    } else {
+        ""
+    };
+    let target_url = build_url(&row.base_url, target_path, target_query);
     let payload = match template.request_kind.as_str() {
         "responses" => serde_json::json!({
             "model": data.model.trim(),
@@ -501,10 +544,17 @@ pub async fn admin_test_upstream_model(
             "messages": [{ "role": "user", "content": prompt }],
             "max_tokens": 1000,
         }),
+        "messages" => serde_json::json!({
+            "model": data.model.trim(),
+            "max_tokens": 1000,
+            "messages": [{ "role": "user", "content": prompt }],
+        }),
         _ => unreachable!(),
     };
-    let default_headers = if template.name == "Codex" {
+    let default_headers = if template.name == "codex-tui" {
         codex_model_test_headers()
+    } else if template.name == "claude-cli" {
+        claude_cli_model_test_headers()
     } else {
         HashMap::from([("content-type".into(), "application/json".into())])
     };
@@ -721,8 +771,31 @@ pub async fn admin_fetch_upstream_balance(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_channel_request_headers, build_json_channel_request, redact_header_preview};
+    use super::{
+        build_channel_request_headers, build_json_channel_request, extract_model_test_reply,
+        redact_header_preview,
+    };
     use std::collections::HashMap;
+
+    #[test]
+    fn extracts_reply_from_anthropic_messages_response() {
+        let payload = serde_json::json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "第一段"},
+                {"type": "text", "text": "第二段"}
+            ],
+            "model": "claude-sonnet-5",
+            "stop_reason": "end_turn"
+        });
+
+        assert_eq!(
+            extract_model_test_reply(&payload).as_deref(),
+            Some("第一段\n第二段")
+        );
+    }
 
     #[test]
     fn admin_channel_requests_apply_overrides_after_api_key_and_defaults() {

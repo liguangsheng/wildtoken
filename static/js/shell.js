@@ -745,7 +745,9 @@ async function loadSettingsPage() {
 }
 
 function templateKindLabel(kind) {
-  return kind === "responses" ? "Responses" : "Chat Completions";
+  if (kind === "responses") return "Responses";
+  if (kind === "messages") return "Messages";
+  return "Chat Completions";
 }
 
 function renderModelTestTemplates() {

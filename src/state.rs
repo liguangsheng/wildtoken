@@ -699,7 +699,7 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         r#"CREATE TABLE IF NOT EXISTS model_test_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
-            request_kind TEXT NOT NULL CHECK (request_kind IN ('responses', 'chat_completions')),
+            request_kind TEXT NOT NULL CHECK (request_kind IN ('responses', 'chat_completions', 'messages')),
             prompt TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -707,11 +707,60 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    // SQLite cannot alter a CHECK constraint in place; recreate the table when an
+    // older schema (created before 'messages' was a valid request_kind) is found.
+    let model_test_templates_schema: Option<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'model_test_templates'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if model_test_templates_schema
+        .map(|sql| !sql.contains("'messages'"))
+        .unwrap_or(false)
+    {
+        sqlx::query("ALTER TABLE model_test_templates RENAME TO model_test_templates_old")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            r#"CREATE TABLE model_test_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                request_kind TEXT NOT NULL CHECK (request_kind IN ('responses', 'chat_completions', 'messages')),
+                prompt TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );"#,
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO model_test_templates (id, name, request_kind, prompt, created_at, updated_at)
+            SELECT id, name, request_kind, prompt, created_at, updated_at FROM model_test_templates_old"#,
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("DROP TABLE model_test_templates_old")
+            .execute(pool)
+            .await?;
+    }
+    // Rename the original defaults before reseeding, so the INSERT below doesn't
+    // create duplicate rows alongside un-migrated 'Codex' / 'OpenCode' rows.
+    sqlx::query(
+        "UPDATE model_test_templates SET name = 'codex-tui', updated_at = datetime('now') WHERE name = 'Codex'",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE model_test_templates SET name = 'opencode', updated_at = datetime('now') WHERE name = 'OpenCode'",
+    )
+    .execute(pool)
+    .await?;
     sqlx::query(
         r#"INSERT INTO model_test_templates (name, request_kind, prompt)
         VALUES
-            ('Codex', 'responses', '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。'),
-            ('OpenCode', 'chat_completions', '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。')
+            ('codex-tui', 'responses', '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。'),
+            ('opencode', 'chat_completions', '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。'),
+            ('claude-cli', 'messages', '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。')
         ON CONFLICT(name) DO NOTHING"#,
     )
     .execute(pool)
@@ -720,7 +769,7 @@ pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"UPDATE model_test_templates
         SET prompt = '请用中文回答：你当前使用的模型名称是什么？请概括你擅长处理的两类任务，并给出一个简短、准确的建议，说明用户在提交复杂问题时应提供哪些关键信息。使用自然段回答，不要使用 Markdown 表格、工具调用或外部引用；结尾加上“WildToken 已收到回答”。总回复不超过 120 个汉字。', updated_at = datetime('now')
-        WHERE name IN ('Codex', 'OpenCode') AND prompt IN ('Reply with exactly: WildToken test passed.', '请用中文完成一次简短的连通性测试。先说明你已收到请求，再用两句话概括：当前模型名称、你能提供的主要能力。不要使用 Markdown 表格，不要调用工具，不要编造外部信息。最后单独输出“WildToken 模型测试通过”，并确保总回复不超过 120 个汉字。')"#,
+        WHERE name IN ('codex-tui', 'opencode') AND prompt IN ('Reply with exactly: WildToken test passed.', '请用中文完成一次简短的连通性测试。先说明你已收到请求，再用两句话概括：当前模型名称、你能提供的主要能力。不要使用 Markdown 表格，不要调用工具，不要编造外部信息。最后单独输出“WildToken 模型测试通过”，并确保总回复不超过 120 个汉字。')"#,
     )
     .execute(pool)
     .await?;

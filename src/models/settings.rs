@@ -76,8 +76,11 @@ impl ModelTestTemplateIn {
         if self.name.trim().is_empty() || self.name.chars().count() > 80 {
             return Err("template name must be between 1 and 80 characters");
         }
-        if !matches!(self.request_kind.as_str(), "responses" | "chat_completions") {
-            return Err("request_kind must be responses or chat_completions");
+        if !matches!(
+            self.request_kind.as_str(),
+            "responses" | "chat_completions" | "messages"
+        ) {
+            return Err("request_kind must be responses, chat_completions, or messages");
         }
         if self.prompt.trim().is_empty() || self.prompt.len() > 20_000 {
             return Err("template prompt must be between 1 and 20000 bytes");

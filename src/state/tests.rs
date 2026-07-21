@@ -71,6 +71,81 @@ async fn initialization_does_not_overwrite_existing_runtime_settings() {
 }
 
 #[tokio::test]
+async fn initialization_migrates_legacy_codex_template_and_seeds_claude_cli() {
+    let pool = test_pool().await;
+
+    // Simulate a pre-migration database: narrower CHECK constraint, and the
+    // templates still named 'Codex' / 'OpenCode' with custom (admin-edited) prompts.
+    sqlx::query(
+        r#"CREATE TABLE model_test_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            request_kind TEXT NOT NULL CHECK (request_kind IN ('responses', 'chat_completions')),
+            prompt TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO model_test_templates (id, name, request_kind, prompt) VALUES (1, 'Codex', 'responses', 'a custom admin prompt'), (2, 'OpenCode', 'chat_completions', 'an opencode prompt')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    init_db(&pool).await.unwrap();
+
+    let codex: (i64, String) =
+        sqlx::query_as("SELECT id, prompt FROM model_test_templates WHERE name = 'codex-tui'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(codex, (1, "a custom admin prompt".to_string()));
+
+    let opencode: (i64, String) =
+        sqlx::query_as("SELECT id, prompt FROM model_test_templates WHERE name = 'opencode'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(opencode, (2, "an opencode prompt".to_string()));
+
+    let old_name_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM model_test_templates WHERE name IN ('Codex', 'OpenCode')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(old_name_count, 0);
+
+    let claude_cli_kind: String =
+        sqlx::query_scalar("SELECT request_kind FROM model_test_templates WHERE name = 'claude-cli'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(claude_cli_kind, "messages");
+
+    // The widened CHECK constraint accepts further 'messages' rows.
+    sqlx::query(
+        "INSERT INTO model_test_templates (name, request_kind, prompt) VALUES ('another-messages-template', 'messages', 'x')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Re-running init_db is idempotent and does not touch the migrated row again.
+    init_db(&pool).await.unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM model_test_templates WHERE name = 'codex-tui'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn initialization_seeds_extended_model_test_prompt_templates() {
     let pool = test_pool().await;
     init_db(&pool).await.unwrap();
