@@ -465,8 +465,10 @@
   background: var(--panel-subtle);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
+  font-family: var(--font-secret);
   font-size: var(--text-sm);
+  font-variant-ligatures: none;
+  letter-spacing: 0;
   padding: 3px 7px;
   word-break: break-all;
 }
@@ -520,8 +522,10 @@
 .token-value-box code {
   color: var(--accent-strong);
   flex: 1;
-  font-family: var(--font-mono);
+  font-family: var(--font-secret);
   font-size: var(--text-sm);
+  font-variant-ligatures: none;
+  letter-spacing: 0;
   user-select: all;
   word-break: break-all;
 }

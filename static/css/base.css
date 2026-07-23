@@ -101,6 +101,7 @@ html[data-theme="dark"] {
   /* Type */
   --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "Fira Code", "SFMono-Regular", ui-monospace, Consolas, "Liberation Mono", Menlo, monospace;
+  --font-secret: "JetBrains Mono", "Cascadia Mono", "Cascadia Code", "SFMono-Regular", ui-monospace, Consolas, "Liberation Mono", Menlo, monospace;
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 13px;
@@ -963,6 +964,14 @@ input[type="radio"] {
 code {
   font-family: var(--font-mono);
   font-size: 0.92em;
+}
+
+#api-key,
+#quick-import-apikey,
+#token-custom {
+  font-family: var(--font-secret);
+  font-variant-ligatures: none;
+  letter-spacing: 0;
 }
 
 /* ── Shell / Topbar ──────────────────────────────────────── */
