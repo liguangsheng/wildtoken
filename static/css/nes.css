@@ -545,6 +545,7 @@ html[data-theme="nes"] .toolbar-batch > button,
 html[data-theme="nes"] .panel-head .actions > button,
 html[data-theme="nes"] .actions > button,
 html[data-theme="nes"] .pager > button,
+html[data-theme="nes"] .log-pager .pager-actions > button,
 html[data-theme="nes"] .modal-footer > button {
   margin-bottom: 6px;
 }

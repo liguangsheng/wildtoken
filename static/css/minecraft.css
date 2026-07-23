@@ -432,6 +432,7 @@ html[data-theme="minecraft"] .toolbar-batch > button,
 html[data-theme="minecraft"] .panel-head .actions > button,
 html[data-theme="minecraft"] .actions > button,
 html[data-theme="minecraft"] .pager > button,
+html[data-theme="minecraft"] .log-pager .pager-actions > button,
 html[data-theme="minecraft"] .modal-footer > button {
   margin-bottom: 5px;
   margin-right: 3px;

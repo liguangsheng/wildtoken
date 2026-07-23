@@ -111,7 +111,8 @@
   .panel-head .actions button,
   .modal-actions button,
   .modal-footer button,
-  .pager button {
+  .pager button,
+  .log-pager .pager-actions button {
     flex: 1 1 0;
     min-width: min(140px, 100%);
   }
@@ -203,6 +204,28 @@
 
   .pager {
     justify-content: stretch;
+  }
+
+  .log-pager {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .log-pager .pager-meta,
+  .log-pager .pager-actions {
+    justify-content: stretch;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .log-pager .pager-size-field {
+    flex: 1 1 auto;
+  }
+
+  .log-pager .pager-size-field select {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
   }
 
   .grid-form {

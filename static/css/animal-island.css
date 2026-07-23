@@ -455,6 +455,7 @@ html[data-theme="animal-island"] .toolbar-batch > button,
 html[data-theme="animal-island"] .panel-head .actions > button,
 html[data-theme="animal-island"] .actions > button,
 html[data-theme="animal-island"] .pager > button,
+html[data-theme="animal-island"] .log-pager .pager-actions > button,
 html[data-theme="animal-island"] .modal-footer > button {
   margin-bottom: 5px;
 }

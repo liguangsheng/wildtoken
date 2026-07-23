@@ -43,6 +43,58 @@
   margin-top: 12px;
 }
 
+.log-pager {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  justify-content: space-between;
+}
+
+.log-pager .pager-meta {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.log-pager .pager-meta-text {
+  letter-spacing: 0.01em;
+}
+
+.log-pager .pager-size-field {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  gap: 6px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.log-pager .pager-size-field select {
+  font-size: var(--text-md);
+  font-weight: 400;
+  letter-spacing: 0;
+  min-height: var(--control-h-sm);
+  min-width: 72px;
+  text-transform: none;
+  width: auto;
+}
+
+.log-pager .pager-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
 /* ── Dialogs ─────────────────────────────────────────────── */
 
 .upstream-dialog,

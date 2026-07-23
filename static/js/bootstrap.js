@@ -106,8 +106,11 @@ const logSensitiveToggle = document.querySelector("#log-sensitive-toggle");
 const logRefreshButton = document.querySelector("#log-refresh");
 const logNewEntriesNotice = document.querySelector("#log-new-entries-notice");
 const logNewEntriesButton = document.querySelector("#log-return-latest");
+const logFirstButton = document.querySelector("#log-first");
 const logPrevButton = document.querySelector("#log-prev");
 const logNextButton = document.querySelector("#log-next");
+const logPageMeta = document.querySelector("#log-page-meta");
+const logPageSizeSelect = document.querySelector("#log-page-size");
 const logDetailDialog = document.querySelector("#log-detail-dialog");
 const logDetailTitle = document.querySelector("#log-detail-title");
 const logDetailSummary = document.querySelector("#log-detail-summary");
@@ -116,7 +119,8 @@ const logDetailClose = document.querySelector("#log-detail-close");
 const logDetailSections = document.querySelectorAll(".log-detail-section");
 const requestDetailGrid = document.querySelector(".request-detail-grid");
 let currentLogDetail = null;
-const LOG_PAGE_SIZE = 50;
+const LOG_PAGE_SIZE_KEY = "wildtoken_log_page_size";
+const LOG_PAGE_SIZE_VALUES = new Set([20, 50, 100, 200]);
 const LOG_REFRESH_KEY = "wildtoken_log_refresh_seconds";
 const DEFAULT_HOME_KEY = "wildtoken_default_home";
 const DEFAULT_REFRESH_MS = 10000;
@@ -129,6 +133,19 @@ const DENSITY_KEY = "wildtoken_density";
 const LOG_COLUMNS_KEY = "wildtoken_log_columns";
 const UPSTREAM_COLUMNS_KEY = "wildtoken_upstream_columns";
 const LOG_SENSITIVE_HIDDEN_KEY = "wildtoken_log_sensitive_hidden";
+function readStoredLogPageSize() {
+  try {
+    const value = Number(localStorage.getItem(LOG_PAGE_SIZE_KEY));
+    if (LOG_PAGE_SIZE_VALUES.has(value)) return value;
+  } catch {
+    /* ignore quota / private mode */
+  }
+  return 50;
+}
+let logPageSize = readStoredLogPageSize();
+if (logPageSizeSelect) {
+  logPageSizeSelect.value = String(logPageSize);
+}
 let logOffset = 0;
 let logHasMore = false;
 let logCursorStack = [];

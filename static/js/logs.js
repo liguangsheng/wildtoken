@@ -623,9 +623,53 @@ function normalizeLogStreamPayload(data) {
   };
 }
 
+function currentLogPageNumber() {
+  return logCursorStack.length + 1;
+}
+
+function formatLogPageRange() {
+  const count = Array.isArray(logPageItems) ? logPageItems.length : 0;
+  if (count === 0) return "暂无记录";
+  const start = logOffset + 1;
+  const end = logOffset + count;
+  return `${start}–${end} 条`;
+}
+
 function updateLogPaginationControls() {
-  logPrevButton.disabled = logCursorStack.length === 0;
-  logNextButton.disabled = !logHasMore || !logNextCursor;
+  const onFirstPage = logCursorStack.length === 0;
+  if (logFirstButton) logFirstButton.disabled = onFirstPage;
+  if (logPrevButton) logPrevButton.disabled = onFirstPage;
+  if (logNextButton) logNextButton.disabled = !logHasMore || !logNextCursor;
+  if (logPageSizeSelect) logPageSizeSelect.value = String(logPageSize);
+  if (logPageMeta) {
+    const page = currentLogPageNumber();
+    const range = formatLogPageRange();
+    const moreHint = logHasMore ? " · 还有更多" : "";
+    logPageMeta.textContent = countIsEmptyLogPage()
+      ? `第 ${page} 页 · 暂无记录`
+      : `第 ${page} 页 · ${range}${moreHint}`;
+  }
+}
+
+function countIsEmptyLogPage() {
+  return !Array.isArray(logPageItems) || logPageItems.length === 0;
+}
+
+function setLogPageSize(nextSize, { reload = true } = {}) {
+  const size = Number(nextSize);
+  if (!LOG_PAGE_SIZE_VALUES.has(size) || size === logPageSize) {
+    if (logPageSizeSelect) logPageSizeSelect.value = String(logPageSize);
+    return;
+  }
+  logPageSize = size;
+  try {
+    localStorage.setItem(LOG_PAGE_SIZE_KEY, String(logPageSize));
+  } catch {
+    /* ignore quota / private mode */
+  }
+  if (logPageSizeSelect) logPageSizeSelect.value = String(logPageSize);
+  resetLogPagination();
+  if (reload) void loadLogs();
 }
 
 function refreshLatestLogCursorFromItems() {
@@ -759,10 +803,10 @@ function flushLogStreamEntries() {
     seen.add(log.id);
     return true;
   });
-  if (uniqueItems.length > LOG_PAGE_SIZE) {
+  if (uniqueItems.length > logPageSize) {
     logHasMore = true;
   }
-  logPageItems = uniqueItems.slice(0, LOG_PAGE_SIZE);
+  logPageItems = uniqueItems.slice(0, logPageSize);
 
   const visibleIds = new Set(logPageItems.map((log) => log.id));
   insertLiveLogRows(incoming.filter((log) => visibleIds.has(log.id)));
@@ -1551,7 +1595,7 @@ async function loadLogs() {
     const clientType = logClientFilter?.value || "";
     const filtersActive = Boolean(upstreamId || search || status || clientType);
     const params = new URLSearchParams({
-      limit: String(LOG_PAGE_SIZE),
+      limit: String(logPageSize),
     });
     appendLogPaginationParams(params);
     if (upstreamId) params.set("upstream_id", upstreamId);

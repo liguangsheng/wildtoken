@@ -829,20 +829,27 @@ logRefreshButton.addEventListener("click", async () => {
     logRefreshButton.textContent = "刷新";
   }
 });
-logPrevButton.addEventListener("click", () => {
+logFirstButton?.addEventListener("click", () => {
+  if (logCursorStack.length === 0) return;
+  returnToLatestLogPage();
+});
+logPrevButton?.addEventListener("click", () => {
   if (logCursorStack.length === 0) return;
   logCurrentCursor = logCursorStack.pop() || null;
   logNextCursor = null;
-  logOffset = Math.max(0, logOffset - LOG_PAGE_SIZE);
+  logOffset = Math.max(0, logOffset - logPageSize);
   loadLogs();
 });
-logNextButton.addEventListener("click", () => {
+logNextButton?.addEventListener("click", () => {
   if (!logHasMore || !logNextCursor) return;
   logCursorStack.push(logCurrentCursor);
   logCurrentCursor = logNextCursor;
   logNextCursor = null;
-  logOffset += LOG_PAGE_SIZE;
+  logOffset += logPageSize;
   loadLogs();
+});
+logPageSizeSelect?.addEventListener("change", () => {
+  setLogPageSize(logPageSizeSelect.value);
 });
 logRows.addEventListener("click", (event) => {
   const emptyAction = event.target.closest("button[data-empty-action]");

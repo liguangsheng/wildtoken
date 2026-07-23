@@ -408,9 +408,24 @@
               <p id="log-new-entries-copy" role="status" aria-live="polite">有新的请求日志。</p>
               <button id="log-return-latest" type="button" class="secondary">返回最新</button>
             </div>
-            <div class="pager">
-              <button id="log-prev" type="button" class="secondary">上一页</button>
-              <button id="log-next" type="button" class="secondary">下一页</button>
+            <div class="pager log-pager">
+              <div class="pager-meta">
+                <span id="log-page-meta" class="pager-meta-text">第 1 页</span>
+                <label class="pager-size-field">
+                  <span class="pager-size-label">每页</span>
+                  <select id="log-page-size" aria-label="日志每页条数">
+                    <option value="20">20</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pager-actions">
+                <button id="log-first" type="button" class="secondary">首页</button>
+                <button id="log-prev" type="button" class="secondary">上一页</button>
+                <button id="log-next" type="button" class="secondary">下一页</button>
+              </div>
             </div>
           </section>
         </section>
