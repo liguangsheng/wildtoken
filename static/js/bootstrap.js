@@ -567,9 +567,15 @@ function hidePopoverLayer(element) {
 
 // Native <select> listboxes ignore CSS (border-radius especially). Intercept
 // opens and render options into #select-panel so the popup follows the theme.
+//
+// Modal <dialog> makes the rest of the document inert. A popover that is only a
+// sibling of the dialog can paint above it in the top layer but still receive no
+// pointer events (clicks pass through). Host the panel inside the open modal
+// when the trigger lives there so it escapes inertness.
 let activeSelect = null;
 let selectActiveIndex = -1;
 let selectOptionButtons = [];
+const selectPanelHome = selectPanel?.parentElement || null;
 
 function isNativeSelect(element) {
   return element instanceof HTMLSelectElement
@@ -589,24 +595,50 @@ function selectOptionEntries(select) {
   }));
 }
 
-function closeCustomSelect(restoreFocus = false) {
-  if (!selectPanel || selectPanel.hidden) {
-    activeSelect = null;
-    selectActiveIndex = -1;
-    selectOptionButtons = [];
-    return;
+function modalDialogForSelect(select) {
+  const dialog = select?.closest?.("dialog");
+  if (!(dialog instanceof HTMLDialogElement) || !dialog.open) return null;
+  try {
+    if (dialog.matches(":modal")) return dialog;
+  } catch {
+    // :modal may be unsupported; treat any open dialog as the host.
   }
+  return dialog;
+}
+
+function placeSelectPanelFor(select) {
+  if (!selectPanel) return;
+  const host = modalDialogForSelect(select) || selectPanelHome;
+  if (!host || selectPanel.parentElement === host) return;
+  if (popoverIsOpen(selectPanel)) {
+    selectPanel.hidePopover();
+  }
+  host.append(selectPanel);
+}
+
+function restoreSelectPanelHost() {
+  if (!selectPanel || !selectPanelHome || selectPanel.parentElement === selectPanelHome) return;
+  if (popoverIsOpen(selectPanel)) {
+    selectPanel.hidePopover();
+  }
+  selectPanelHome.append(selectPanel);
+}
+
+function closeCustomSelect(restoreFocus = false) {
   const select = activeSelect;
   activeSelect = null;
   selectActiveIndex = -1;
   selectOptionButtons = [];
-  selectPanel.innerHTML = "";
-  selectPanel.style.visibility = "";
-  selectPanel.style.width = "";
-  selectPanel.style.left = "";
-  selectPanel.style.top = "";
-  selectPanel.removeAttribute("aria-activedescendant");
-  hidePopoverLayer(selectPanel);
+  if (selectPanel && !selectPanel.hidden) {
+    selectPanel.innerHTML = "";
+    selectPanel.style.visibility = "";
+    selectPanel.style.width = "";
+    selectPanel.style.left = "";
+    selectPanel.style.top = "";
+    selectPanel.removeAttribute("aria-activedescendant");
+    hidePopoverLayer(selectPanel);
+  }
+  restoreSelectPanelHost();
   if (restoreFocus && select?.isConnected) {
     select.focus();
   }
@@ -717,6 +749,7 @@ function openCustomSelect(select) {
   }
 
   selectPanel.style.visibility = "hidden";
+  placeSelectPanelFor(select);
   showPopoverLayer(selectPanel, true);
   window.requestAnimationFrame(() => {
     if (activeSelect !== select) return;
@@ -809,6 +842,10 @@ document.addEventListener("keydown", (event) => {
 
 window.addEventListener("resize", () => closeCustomSelect());
 window.addEventListener("scroll", () => closeCustomSelect(), true);
+// Dialog close leaves the select trigger gone; drop the panel and restore its home node.
+document.addEventListener("close", (event) => {
+  if (event.target instanceof HTMLDialogElement) closeCustomSelect();
+}, true);
 
 function splitList(value) {
   return value
