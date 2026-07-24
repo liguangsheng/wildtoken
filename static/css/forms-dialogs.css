@@ -726,8 +726,6 @@ button.model-selection-remove:focus-visible {
   color: var(--muted);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 22px;
-  font-weight: 400;
   justify-content: center;
   line-height: 1;
   min-height: 32px;
@@ -736,16 +734,31 @@ button.model-selection-remove:focus-visible {
   width: 32px;
 }
 
-.icon-maximize {
-  font-size: 15px;
-  font-weight: 600;
+/* Shared stroke weight so maximize/restore/close read as one family. */
+.icon-close .dialog-icon,
+.icon-maximize .dialog-icon {
+  display: block;
+  fill: none;
+  flex: 0 0 auto;
+  height: 14px;
+  overflow: visible;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+  width: 14px;
 }
 
-.icon-close span,
-.icon-maximize span {
+.icon-maximize .dialog-icon--restore {
+  display: none;
+}
+
+.icon-maximize[aria-pressed="true"] .dialog-icon--maximize {
+  display: none;
+}
+
+.icon-maximize[aria-pressed="true"] .dialog-icon--restore {
   display: block;
-  line-height: 1;
-  transform: translateY(-0.5px);
 }
 
 .icon-close:hover,

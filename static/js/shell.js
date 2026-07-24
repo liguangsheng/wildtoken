@@ -31,8 +31,6 @@ function setDialogMaximized(dialog, maximized) {
     button.setAttribute("aria-pressed", String(next));
     button.setAttribute("aria-label", next ? "还原" : "最大化");
     button.title = next ? "还原" : "最大化";
-    const glyph = button.querySelector("span");
-    if (glyph) glyph.textContent = next ? "❐" : "▢";
   }
   return next;
 }
