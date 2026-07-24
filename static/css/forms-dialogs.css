@@ -97,6 +97,12 @@
 
 /* ── Dialogs ─────────────────────────────────────────────── */
 
+/* Modal open: keep the page from taking leftover wheel/trackpad scroll. */
+html:has(dialog:modal) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 .upstream-dialog,
 .model-dialog,
 .log-detail-dialog,
@@ -112,6 +118,7 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg), var(--glow-accent);
   color: var(--text);
+  overscroll-behavior: contain;
   padding: 0;
 }
 
@@ -252,6 +259,7 @@
   gap: 2px;
   max-height: min(360px, 50vh);
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 6px;
 }
 
@@ -325,6 +333,7 @@
   display: grid;
   gap: 16px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 16px 20px 18px;
 }
 
@@ -872,6 +881,7 @@ dialog.is-maximized .log-detail-panel {
   gap: 1px;
   min-height: 140px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 6px;
 }
 

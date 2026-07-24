@@ -292,6 +292,7 @@
   .confirm-panel {
     max-height: min(720px, calc(100dvh - 16px));
     overflow: auto;
+    overscroll-behavior: contain;
     padding: 14px;
   }
 
