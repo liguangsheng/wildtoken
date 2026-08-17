@@ -451,6 +451,7 @@ html[data-density="compact"] .wt-seg-btn {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
 }
 
 .sparkline-header {
@@ -477,6 +478,105 @@ html[data-density="compact"] .wt-seg-btn {
   width: 100%;
   height: 48px;
   color: var(--accent);
+}
+
+.sparkline-svg {
+  width: 100%;
+  height: 48px;
+  color: var(--accent);
+}
+
+.sparkline-svg .channel-spark-hit-area {
+  cursor: crosshair;
+  fill: transparent;
+  pointer-events: all;
+}
+
+.sparkline-svg .channel-spark-hover-guide,
+.sparkline-svg .channel-spark-hover-dot {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sparkline-svg .channel-spark-hover-guide {
+  stroke: var(--line-strong, var(--line));
+  stroke-dasharray: 2 2;
+  stroke-width: 1;
+}
+
+.sparkline-svg .channel-spark-hover-dot {
+  fill: currentColor;
+}
+
+.sparkline-svg[data-hovering] .channel-spark-hover-guide,
+.sparkline-svg[data-hovering] .channel-spark-hover-dot {
+  opacity: 1;
+}
+
+.channel-spark-tooltip {
+  left: 0;
+  max-width: calc(100% - 12px);
+  top: 0;
+}
+
+/* 24h 健康行：在线率/均延迟摘要 + 逐小时条形图。 */
+.channel-card-health {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.health-summary {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 10px;
+}
+
+.health-stat {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.health-stat.is-ok {
+  color: var(--ok, #3d9970);
+}
+
+.health-stat.is-warn {
+  color: var(--warning);
+}
+
+.health-stat.is-bad {
+  color: var(--danger);
+}
+
+.health-bars {
+  align-items: flex-end;
+  display: flex;
+  gap: 2px;
+  height: 28px;
+}
+
+.health-bar {
+  background: var(--ok, #3d9970);
+  border-radius: 1px;
+  flex: 1 1 0;
+  min-width: 2px;
+  opacity: 0.75;
+}
+
+.health-bar--warn {
+  background: var(--warning);
+}
+
+.health-bar--bad {
+  background: var(--danger);
+}
+
+.health-bars-empty {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* 停用的渠道用中性色，避免灰卡片上还挂着高亮曲线。 */

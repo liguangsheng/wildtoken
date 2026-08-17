@@ -147,12 +147,20 @@ func codexModelTestHeaders() map[string]string {
 }
 
 // claudeCLIModelTestHeaders reproduces what the Claude Code CLI sends.
-func claudeCLIModelTestHeaders() map[string]string {
+//
+// A model name carrying the [1m] suffix is a relay-side alias for the 1M context
+// window, which providers only honor alongside the matching beta header — the
+// CLI itself sends it via ANTHROPIC_BETAS, so the test does the same.
+func claudeCLIModelTestHeaders(model string) map[string]string {
+	betas := "claude-code-20250219,interleaved-thinking-2025-05-14," +
+		"mid-conversation-system-2026-04-07,effort-2025-11-24"
+	if strings.Contains(strings.ToLower(model), "[1m]") {
+		betas += ",context-1m-2025-08-07"
+	}
 	return map[string]string{
 		"accept":          "application/json",
 		"accept-encoding": "identity",
-		"anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14," +
-			"mid-conversation-system-2026-04-07,effort-2025-11-24",
+		"anthropic-beta":  betas,
 		"anthropic-dangerous-direct-browser-access": "true",
 		"anthropic-version":                         "2023-06-01",
 		"content-type":                              "application/json",
@@ -168,6 +176,16 @@ func claudeCLIModelTestHeaders() map[string]string {
 		"x-stainless-runtime-version":               "v26.3.0",
 		"x-stainless-timeout":                       "600",
 	}
+}
+
+// stripContext1MSuffix removes a trailing [1m] alias from a model id. The
+// beta-header decision in claudeCLIModelTestHeaders still reads the model as
+// typed, so the alias keeps its effect while the id goes upstream clean.
+func stripContext1MSuffix(model string) string {
+	if suffix := strings.ToLower(model[max(0, len(model)-4):]); suffix == "[1m]" {
+		return model[:len(model)-4]
+	}
+	return model
 }
 
 // extractModelIDs reads model ids from the several shapes providers return.
@@ -845,7 +863,7 @@ func AdminTestUpstreamModel(state *appstate.State) http.HandlerFunc {
 		case "responses":
 			defaultHeaders = codexModelTestHeaders()
 		case "messages":
-			defaultHeaders = claudeCLIModelTestHeaders()
+			defaultHeaders = claudeCLIModelTestHeaders(strings.TrimSpace(input.Model))
 		}
 
 		overrides, err := parseExtraHeaders(row.ExtraHeaders)
@@ -928,9 +946,12 @@ func modelTestRequest(requestKind, model, prompt string) (string, json.RawMessag
 			"max_tokens": 1000,
 		}
 	case "messages":
+		// The [1m] suffix is the CLI's alias for the 1M context window, resolved
+		// client-side into the context-1m beta header; providers list only the
+		// plain id, so the suffix must not reach the model field.
 		path = "messages"
 		payload = map[string]any{
-			"model":      model,
+			"model":      stripContext1MSuffix(model),
 			"max_tokens": 1000,
 			"messages":   []map[string]string{{"role": "user", "content": prompt}},
 		}
@@ -1486,7 +1507,7 @@ func AdminExportUpstreams(state *appstate.State) http.HandlerFunc {
 		}
 
 		resp := models.ExportUpstreamsResponse{
-			Kind:       "wildtoken-channels",
+			Kind:       "wildtoken.channels",
 			Version:    1,
 			ExportedAt: time.Now().UTC().Format(time.RFC3339),
 			Channels:   channels,

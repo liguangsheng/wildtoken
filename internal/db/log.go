@@ -407,6 +407,9 @@ type topLogCountSpec struct {
 	metricFilter     string
 	// exposeGroupID surfaces the numeric group key as `id` (channel rankings).
 	exposeGroupID bool
+	// withLatency attaches per-group average duration and error rate to the
+	// ranking rows (request-count rankings of models/channels).
+	withLatency bool
 }
 
 // channelNameExpression prefers a non-empty upstream_name snapshot, else "#<id>".
@@ -442,6 +445,7 @@ func topLogStats(ctx context.Context, database *sql.DB, window LogTopWindow,
 			groupExpression:  actualModelExpression,
 			sourceFilter:     modelSourceFilter,
 			metricExpression: "1",
+			withLatency:      true,
 		},
 		{
 			nameExpression:   channelNameExpression,
@@ -494,10 +498,21 @@ func topLogCounts(ctx context.Context, database *sql.DB, window LogTopWindow,
 	if spec.exposeGroupID {
 		idSelect = "CAST(group_key AS INTEGER) AS id"
 	}
+	// Latency context rides along as extra per-row columns so one pass feeds
+	// both the ranking metric and the duration/error aggregates.
+	rowExtras := ""
+	outerExtras := ""
+	if spec.withLatency {
+		rowExtras = `, CASE WHEN duration_ms IS NOT NULL AND duration_ms >= 0 THEN duration_ms END AS dur,
+			CASE WHEN status_code IS NULL OR status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END AS is_err`
+		outerExtras = `, AVG(dur) AS avg_dur,
+			CAST(SUM(is_err) AS REAL) / COUNT(*) AS error_rate,
+			SUM(CASE WHEN dur IS NOT NULL THEN 1 ELSE 0 END) AS dur_count`
+	}
 
 	var query strings.Builder
-	fmt.Fprintf(&query, "SELECT MAX(name) AS name, SUM(value) AS count, %s FROM (SELECT %s AS group_key, %s AS name, %s AS value FROM request_logs WHERE ",
-		idSelect, spec.groupExpression, spec.nameExpression, spec.metricExpression)
+	fmt.Fprintf(&query, "SELECT MAX(name) AS name, SUM(value) AS count, %s%s FROM (SELECT %s AS group_key, %s AS name, %s AS value%s FROM request_logs WHERE ",
+		idSelect, outerExtras, spec.groupExpression, spec.nameExpression, spec.metricExpression, rowExtras)
 	args, err := appendLogTimePredicate(&query, nil, window, startAt, endAt)
 	if err != nil {
 		return nil, err
@@ -521,12 +536,28 @@ func topLogCounts(ctx context.Context, database *sql.DB, window LogTopWindow,
 	for rows.Next() {
 		var item models.RequestLogTopItemOut
 		var id sql.NullInt64
-		if err := rows.Scan(&item.Name, &item.Count, &id); err != nil {
+		var avgDur, errorRate sql.NullFloat64
+		var durCount sql.NullInt64
+		var scanDest []any
+		if spec.withLatency {
+			scanDest = []any{&item.Name, &item.Count, &id, &avgDur, &errorRate, &durCount}
+		} else {
+			scanDest = []any{&item.Name, &item.Count, &id}
+		}
+		if err := rows.Scan(scanDest...); err != nil {
 			return nil, apperr.Database(err)
 		}
 		if spec.exposeGroupID && id.Valid {
 			value := id.Int64
 			item.ID = &value
+		}
+		if durCount.Valid && durCount.Int64 > 0 && avgDur.Valid {
+			avg := avgDur.Float64
+			item.AvgDurationMs = &avg
+		}
+		if errorRate.Valid {
+			rate := errorRate.Float64
+			item.ErrorRate = &rate
 		}
 		items = append(items, item)
 	}

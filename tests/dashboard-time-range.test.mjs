@@ -164,6 +164,39 @@ test("ranking labels cover the ranges the shared control can select", () => {
   }
 });
 
+test("the request KPI spark uses the whole card as its hover target", () => {
+  const source = read("static/js/dashboard.js");
+  const styles = read("static/css/dashboard.css");
+  assert.match(source, /card\.addEventListener\("pointerenter"/);
+  assert.match(source, /card\.addEventListener\("pointermove"/);
+  assert.match(source, /card\.addEventListener\("pointerleave"/);
+  assert.doesNotMatch(source, /hoverLayer\.addEventListener\("pointermove"/);
+  assert.match(styles, /\.kpi-bg-spark\s*\{[\s\S]*?pointer-events:\s*none;/);
+  // tooltip 必须是卡片的直接子节点，不能塞回曲线容器里被数字压住。
+  assert.match(source, /class="kpi-spark-tooltip" role="status"/);
+  assert.doesNotMatch(source, /class="kpi-spark-hit-layer"/);
+});
+
+test("request KPI spark maps pointer X to interpolated bucket data", () => {
+  const source = read("static/js/dashboard.js");
+  const context = vm.createContext({ KPI_SPARK_VIEW: { width: 100, height: 32 } });
+  vm.runInContext(extractFunction(source, "kpiSparkPointAtRatio"), context);
+  const point = vm.runInContext(
+    "kpiSparkPointAtRatio([10, 30, 50], 0.25)",
+    context,
+  );
+  assert.equal(point.index, 0);
+  assert.equal(point.next, 1);
+  assert.equal(point.progress, 0.5);
+  assert.equal(point.value, 20);
+  assert.equal(point.x, 25);
+
+  context.candidate = -1;
+  assert.equal(vm.runInContext("kpiSparkPointAtRatio([10, 30, 50], candidate).value", context), 10);
+  context.candidate = 2;
+  assert.equal(vm.runInContext("kpiSparkPointAtRatio([10, 30, 50], candidate).value", context), 50);
+});
+
 test("the dashboard exposes exactly one time control", () => {
   const markup = read("static/admin.html");
 

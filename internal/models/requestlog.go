@@ -111,6 +111,11 @@ type RequestLogTopItemOut struct {
 	Count int64  `json:"count"`
 	// ID is present for channel rankings grouped by `upstream_id`.
 	ID *int64 `json:"id,omitempty"`
+	// AvgDurationMs and ErrorRate attach latency and failure context to
+	// request-count rankings: which models feel slow or fail, beyond how
+	// often they are called. Absent on token rankings.
+	AvgDurationMs *float64 `json:"avg_duration_ms,omitempty"`
+	ErrorRate     *float64 `json:"error_rate,omitempty"`
 }
 
 type RequestLogTopStatsOut struct {

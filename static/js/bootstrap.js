@@ -444,6 +444,10 @@ const settingsSuccessIncrement = document.querySelector("#settings-success-incre
 const settingsRecoveryIncrement = document.querySelector("#settings-recovery-increment");
 const settingsRecoveryInterval = document.querySelector("#settings-recovery-interval");
 const routingSettingsStatus = document.querySelector("#routing-settings-status");
+const proxySettingsForm = document.querySelector("#proxy-settings-form");
+const settingsProxyEnabled = document.querySelector("#settings-proxy-enabled");
+const settingsProxyUrl = document.querySelector("#settings-proxy-url");
+const proxySettingsStatus = document.querySelector("#proxy-settings-status");
 const settingsRevision = document.querySelector("#settings-revision");
 const serverSettingsStatus = document.querySelector("#server-settings-status");
 const rotateAdminTokenButton = document.querySelector("#rotate-admin-token");
@@ -554,6 +558,7 @@ let tokenSearchTimer = null;
 
 let upstreams = [];
 let activeActionMenuButton = null;
+let openActionMenuUpstreamId = null;
 let lastUpstreamLoadError = "";
 const modelDialogState = {
   upstream: null,
@@ -1162,6 +1167,16 @@ function escapeHtml(value) {
     };
     return entities[char];
   });
+}
+
+/* 迷你图统一用 preserveAspectRatio="none"：曲线要铺满整宽，横纵缩放比例
+   因此不同（例如 viewBox 100×40 画在 260×48px 上，横向 2.6 倍、纵向 1.2
+   倍）。<circle> 会跟着被横向拉扁成椭圆，补偿办法是给它反向的横向缩放，
+   再把 cx 除以同一个系数抵消位移。系数 = 纵向缩放 / 横向缩放。
+   bounds 是 svg 的 getBoundingClientRect()，view 是 {width, height} 的
+   viewBox 尺寸。 */
+function sparkDotScaleX(bounds, view) {
+  return (bounds.height * view.width) / Math.max(bounds.width * view.height, 1);
 }
 
 /* Catmull-Rom 转三次贝塞尔的平滑折线，渠道卡片的 6h 请求量和看板的延迟趋势

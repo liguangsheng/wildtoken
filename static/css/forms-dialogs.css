@@ -141,6 +141,14 @@ html:has(dialog:modal) {
   width: 960px;
 }
 
+/* The group form only contains two fields; keep it compact instead of using
+   the full-width channel editor surface. It still inherits the upstream
+   dialog's scrolling and responsive behavior below. */
+.group-dialog {
+  max-width: min(560px, calc(100vw - 32px));
+  width: 560px;
+}
+
 .model-dialog {
   max-width: min(760px, calc(100vw - 32px));
   width: 760px;

@@ -107,7 +107,6 @@ func New(ctx context.Context) (*Server, error) {
 
 	state := &appstate.State{
 		DB:                  database,
-		HTTPClient:          newHTTPClient(settings.Upstream.DefaultTimeoutSeconds),
 		Settings:            settings,
 		AutoWeight:          proxy.NewAutoWeightManager(),
 		Runtime:             appstate.NewSettingsStore(appstate.LoadRuntimeSettings(ctx, database)),
@@ -123,6 +122,9 @@ func New(ctx context.Context) (*Server, error) {
 		Quotas:              quotas,
 		StartedAt:           time.Now(),
 	}
+	// The client reads the proxy setting through the runtime store on every
+	// request, so a console edit applies to new connections without a restart.
+	state.HTTPClient = newHTTPClient(settings.Upstream.DefaultTimeoutSeconds, state.Runtime.Get)
 
 	go db.RunLogStatsRefreshLoop(jobsCtx, database, logStats, runtimeMetrics)
 	go proxy.RunCleanupLoop(jobsCtx, database, state.Runtime.Get, runtimeMetrics, logStats)
@@ -274,12 +276,24 @@ func sqliteDSN(settings config.DatabaseSettings) (string, error) {
 // is a channel leading the gateway somewhere it was not configured to go.
 const maxUpstreamRedirects = 3
 
-func newHTTPClient(defaultTimeoutSeconds float64) *http.Client {
+func newHTTPClient(defaultTimeoutSeconds float64, runtime func() models.RuntimeSettings) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 20
 	// A streamed response must reach the client as it arrives, so the transport
 	// is told not to buffer by requesting compression itself.
 	transport.DisableCompression = true
+	// The proxy decision is read per request rather than fixed at startup, so a
+	// console edit takes effect without restarting. The transport keys pooled
+	// connections by proxy, so toggling never reuses a connection dialed the
+	// other way. When disabled, the environment variables keep their say, which
+	// is what this transport inherited before the setting existed.
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		settings := runtime()
+		if !settings.ProxyEnabled || strings.TrimSpace(settings.ProxyURL) == "" {
+			return http.ProxyFromEnvironment(req)
+		}
+		return url.Parse(strings.TrimSpace(settings.ProxyURL))
+	}
 	// No ResponseHeaderTimeout: this transport is shared by every channel, so a
 	// value here is a ceiling on all of them. Setting it to the default cut off
 	// channels configured with a longer one, and did it in a way the caller

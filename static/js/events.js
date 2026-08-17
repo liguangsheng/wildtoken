@@ -378,6 +378,7 @@ settingsDefaultHome?.addEventListener("change", () => {
 });
 serverSettingsForm?.addEventListener("submit", saveServerSettings);
 routingSettingsForm?.addEventListener("submit", saveRoutingSettings);
+proxySettingsForm?.addEventListener("submit", saveProxySettings);
 newModelTestPromptButton?.addEventListener("click", () => openModelTestPromptDialog());
 modelTestPromptList?.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-model-prompt-action]");

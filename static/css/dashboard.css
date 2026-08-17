@@ -166,7 +166,7 @@
   align-self: flex-end;
   display: flex;
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
   max-width: 100%;
@@ -257,6 +257,26 @@ html[data-theme] button.dashboard-apply-custom,
 .dashboard-date-field:hover,
 .dashboard-date-field:focus-within {
   border-color: var(--accent-border, var(--line-strong, var(--line)));
+}
+
+/* Visual hint that the whole field opens the date picker. */
+.dashboard-date-field::after {
+  color: var(--muted);
+  content: "▾";
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+/* 原生日历指示器拉伸铺满整个输入区域：点击字段任意位置都等价于点击
+   日历图标，不依赖 JS 的 showPicker（showPicker 不可用时依然生效）。 */
+.dashboard-date-field input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  height: 100%;
+  left: 0;
+  opacity: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
 }
 
 .dashboard-date-text {
@@ -600,7 +620,10 @@ html[data-theme] .dashboard-date-field input[type="date"],
   opacity: 1;
 }
 
-/* 请求数卡的背景趋势曲线：绝对定位铺在卡片下半部，最底层。 */
+/* 请求数卡的背景趋势曲线：绝对定位铺在卡片下半部，最底层。
+   曲线形态的切换过渡由 JS 逐帧插值 path 完成（见 animateSparkMorph）。
+   命中区域是整张卡片，事件绑在卡片上（见 bindKpiRequestSparkInteraction），
+   所以曲线本身完全不吃 pointer events。 */
 .kpi-bg-spark {
   bottom: 0;
   color: var(--accent);
@@ -610,6 +633,72 @@ html[data-theme] .dashboard-date-field input[type="date"],
   position: absolute;
   right: 0;
   z-index: 0;
+}
+
+.kpi-bg-spark-svg {
+  display: block;
+  height: 100%;
+  pointer-events: none;
+  position: relative;
+  width: 100%;
+}
+
+/* 整卡都能取值，指针形状也覆盖整卡。 */
+.dashboard-kpi:has(> .kpi-bg-spark) {
+  cursor: crosshair;
+}
+
+.kpi-spark-hover-guide,
+.kpi-spark-hover-dot {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.kpi-spark-hover-guide {
+  stroke: var(--line-strong, var(--line));
+  stroke-dasharray: 2 2;
+  stroke-width: 1;
+}
+
+.kpi-spark-hover-dot {
+  fill: currentColor;
+}
+
+.kpi-bg-spark-svg[data-hovering] .kpi-spark-hover-guide,
+.kpi-bg-spark-svg[data-hovering] .kpi-spark-hover-dot {
+  opacity: 1;
+}
+
+.kpi-spark-tooltip,
+.channel-spark-tooltip {
+  background: var(--panel-elevated);
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  display: grid;
+  gap: 2px;
+  padding: 5px 7px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 3;
+}
+
+.kpi-spark-tooltip[hidden],
+.channel-spark-tooltip[hidden] {
+  display: none;
+}
+
+.kpi-spark-tooltip strong,
+.channel-spark-tooltip strong,
+.kpi-spark-tooltip span,
+.channel-spark-tooltip span {
+  font-size: var(--text-xs);
+}
+
+.kpi-spark-tooltip span,
+.channel-spark-tooltip span {
+  color: var(--muted);
 }
 
 /* 曲线是 position:absolute，会盖在静态文本上面——文字层显式抬到曲线之上。 */
@@ -774,26 +863,136 @@ html[data-theme] .dashboard-date-field input[type="date"],
   color: var(--accent);
   display: block;
   height: 100px;
+  overflow: visible;
   width: 100%;
+}
+
+.dashboard-spark .spark-morph-line,
+.dashboard-spark .spark-morph-p95 {
+  transition: opacity 160ms ease, stroke-width 160ms ease, filter 160ms ease;
+}
+
+.dashboard-spark .spark-hit-area {
+  cursor: crosshair;
+  fill: transparent;
+  pointer-events: all;
+}
+
+.dashboard-spark .spark-hover-guide,
+.dashboard-spark .spark-hover-dot {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.dashboard-spark .spark-hover-guide {
+  stroke: var(--line-strong, var(--line));
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.dashboard-spark .spark-hover-dot {
+  fill: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  stroke: none;
+  transition: opacity 120ms ease;
+}
+
+.dashboard-spark[data-active-series] .spark-hover-guide {
+  opacity: 1;
+}
+
+.dashboard-spark[data-active-series="avg"] .spark-hover-dot--p95,
+.dashboard-spark[data-active-series="p95"] .spark-hover-dot--avg {
+  opacity: 0;
+}
+
+.dashboard-spark[data-active-series="avg"] .spark-hover-dot--avg,
+.dashboard-spark[data-active-series="p95"] .spark-hover-dot--p95 {
+  opacity: 1;
+}
+
+.dashboard-spark[data-active-series="avg"] .spark-morph-line {
+  filter: drop-shadow(0 0 3px currentColor);
+  stroke-width: 2.8;
+}
+
+.dashboard-spark[data-active-series="avg"] .spark-morph-p95 {
+  opacity: 0.18;
+}
+
+.dashboard-spark[data-active-series="p95"] .spark-morph-p95 {
+  filter: drop-shadow(0 0 3px currentColor);
+  opacity: 1;
+  stroke-width: 2.2;
+}
+
+.dashboard-spark[data-active-series="p95"] .spark-morph-line,
+.dashboard-spark[data-active-series="p95"] .spark-morph-area {
+  opacity: 0.18;
+}
+
+.dashboard-chart-tooltip {
+  background: var(--panel-elevated);
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  display: grid;
+  gap: 3px;
+  left: 0;
+  margin: 0;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 7px 9px;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 2;
+}
+
+.dashboard-chart-tooltip[hidden] {
+  display: none;
+}
+
+.dashboard-chart-tooltip strong {
+  font-size: var(--text-xs);
+}
+
+.dashboard-chart-tooltip span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 /* 延迟图的曲线要贴着摘要的分隔线：去掉 .dashboard-chart 默认的 10px 纵向
    间距（只影响这一个图表，状态分布图保持原样）。 */
 #dashboard-latency-chart {
   gap: 0;
+  position: relative;
 }
 
 .dashboard-latency-summary {
   border-top: 1px solid var(--line-soft);
   display: grid;
   gap: 8px;
+  /* 六项两行：最近/平均/范围 + P50/P95/P99。 */
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 0;
   padding-top: 9px;
+  row-gap: 6px;
 }
 
 .dashboard-latency-summary div {
   min-width: 0;
+}
+
+/* Top 模型请求行的次要信息：平均耗时 · 错误率。 */
+.dashboard-rank-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin-left: 6px;
+  white-space: nowrap;
 }
 
 .dashboard-latency-summary dt {
@@ -1164,51 +1363,58 @@ html[data-theme] button.wt-seg-btn.is-active:focus-visible {
   scrollbar-width: thin;
 }
 
-.dashboard-custom-chip {
-  max-width: 4.75rem;
-  overflow: hidden;
-  transition:
-    max-width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 160ms ease,
-    padding 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    margin 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-#dashboard-time-chips.is-custom .dashboard-custom-chip {
-  margin: 0;
-  max-width: 0;
-  opacity: 0;
-  padding-left: 0;
-  padding-right: 0;
-  pointer-events: none;
-}
-
+/* Sits next to the segmented chips (not inside them) so the date inputs stay
+   clickable: the chips row scrolls horizontally and paints a thumb overlay,
+   both of which swallow clicks on anything embedded in it. */
+/* Slides out from the active chip: fade + gentle overshoot on enter, a
+   slightly quicker settle on exit so switching ranges feels snappy. */
 .dashboard-custom-range {
-  display: grid;
+  align-items: center;
+  display: inline-flex;
   flex: 0 0 auto;
-  grid-template-columns: 0fr;
-  max-width: 0;
-  min-width: 0;
   opacity: 0;
-  overflow: hidden;
   pointer-events: none;
-  position: static;
-  transform: none;
+  transform: translateX(12px) scale(0.96);
+  transform-origin: left center;
   transition:
-    grid-template-columns 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    max-width 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 180ms ease;
+    opacity 140ms ease,
+    transform 160ms cubic-bezier(0.4, 0, 0.9, 0.6);
 }
 
 .dashboard-custom-range.is-open {
-  flex-shrink: 0;
-  grid-template-columns: 1fr;
-  max-width: none;
   opacity: 1;
   pointer-events: auto;
+  transform: none;
+  transition:
+    opacity 160ms ease,
+    transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1.1);
 }
 
-.dashboard-custom-range[hidden]:not(.is-open) {
+/* Stagger the fields so the panel unfolds instead of moving as one block. */
+.dashboard-custom-range-inner > * {
+  opacity: 0;
+  transform: translateX(6px);
+  transition:
+    opacity 140ms ease,
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition-delay: 0ms;
+}
+
+.dashboard-custom-range.is-open .dashboard-custom-range-inner > * {
+  opacity: 1;
+  transform: none;
+  transition-delay: 60ms;
+}
+
+.dashboard-custom-range.is-open .dashboard-custom-range-inner > *:nth-child(2) {
+  transition-delay: 90ms;
+}
+
+.dashboard-custom-range.is-open .dashboard-custom-range-inner > *:nth-child(n+3) {
+  transition-delay: 120ms;
+}
+
+.dashboard-custom-range[hidden] {
   display: none;
 }
 
@@ -1224,11 +1430,6 @@ html[data-theme] button.wt-seg-btn.is-active:focus-visible {
 }
 
 
-@media (max-width: 760px) {
-  .dashboard-custom-range.is-open {
-    max-width: none;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .dashboard-kpi,
   .dashboard-custom-range,

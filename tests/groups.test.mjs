@@ -44,6 +44,26 @@ test("分组页的表头与渲染出的单元格列数一致", () => {
   assert.match(source, /colspan="5"/);
 });
 
+test("新增分组弹框使用完整的头部、底部和紧凑宽度结构", () => {
+  const markup = read("static/admin.html");
+  const groupId = markup.indexOf('id="group-dialog"');
+  const dialogStart = markup.lastIndexOf("<dialog", groupId);
+  const dialogEnd = markup.indexOf("</dialog>", dialogStart);
+  assert.ok(groupId >= 0 && dialogStart >= 0 && dialogEnd > dialogStart, "分组弹框缺失");
+  const dialog = markup.slice(dialogStart, dialogEnd);
+
+  // 头部/底部类名分别驱动内边距、分隔线和移动端按钮布局；类名写错
+  // 时标题会贴边、按钮会脱离弹框底栏。
+  assert.match(dialog, /class="upstream-dialog group-dialog"/);
+  assert.match(dialog, /aria-labelledby="group-dialog-title"/);
+  assert.match(dialog, /aria-describedby="group-dialog-description"/);
+  assert.match(dialog, /<header class="modal-head upstream-modal-head">/);
+  assert.match(dialog, /<footer class="modal-footer">/);
+
+  const styles = read("static/css/forms-dialogs.css");
+  assert.match(styles, /\.group-dialog\s*\{[^}]*width:\s*560px;/s);
+});
+
 test("渠道表单提交的分组字段名与服务端一致", () => {
   const source = read("static/js/upstreams.js");
   // 服务端读的是 group_ids；名字不一致会被静默忽略，渠道就落回 default。

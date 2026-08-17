@@ -155,19 +155,19 @@
                   <button type="button" class="wt-seg-btn" data-dashboard-range="all">全部</button>
                   <button type="button" class="wt-seg-btn" data-dashboard-range="default">对比</button>
                   <button type="button" class="wt-seg-btn dashboard-custom-chip" data-dashboard-range="custom">自定义</button>
-                  <div id="dashboard-custom-range" class="dashboard-custom-range" hidden>
-                    <div class="dashboard-custom-range-inner">
-                      <label class="dashboard-date-field" data-placeholder="开始">
-                        <span class="dashboard-date-text">开始</span>
-                        <input type="date" id="dashboard-start-date" aria-label="开始日期" />
-                      </label>
-                      <span class="dashboard-date-sep">至</span>
-                      <label class="dashboard-date-field" data-placeholder="结束">
-                        <span class="dashboard-date-text">结束</span>
-                        <input type="date" id="dashboard-end-date" aria-label="结束日期" />
-                      </label>
-                      <button type="button" id="dashboard-apply-custom" class="secondary dashboard-apply-custom">应用</button>
-                    </div>
+                </div>
+                <div id="dashboard-custom-range" class="dashboard-custom-range" hidden>
+                  <div class="dashboard-custom-range-inner">
+                    <label class="dashboard-date-field" data-placeholder="开始">
+                      <span class="dashboard-date-text">开始</span>
+                      <input type="date" id="dashboard-start-date" aria-label="开始日期" />
+                    </label>
+                    <span class="dashboard-date-sep">至</span>
+                    <label class="dashboard-date-field" data-placeholder="结束">
+                      <span class="dashboard-date-text">结束</span>
+                      <input type="date" id="dashboard-end-date" aria-label="结束日期" />
+                    </label>
+                    <button type="button" id="dashboard-apply-custom" class="secondary dashboard-apply-custom">应用</button>
                   </div>
                 </div>
                 <label class="dashboard-range-field wt-field" for="dashboard-time-preset">
@@ -680,6 +680,25 @@
                 </form>
               </section>
 
+              <section class="settings-card" aria-labelledby="proxy-settings-title">
+                <div class="settings-card-head"><div><h3 id="proxy-settings-title">出站代理</h3><p>启用后网关向上游发起的请求（转发、渠道探测、模型测试）都会经过该代理；保存后对新建立的连接立即生效。</p></div><span class="settings-readonly-tag">全局</span></div>
+                <form id="proxy-settings-form" class="settings-server-form">
+                  <div class="settings-fields-grid">
+                    <div class="toggle-list span-2">
+                      <label class="toggle-row">
+                        <input id="settings-proxy-enabled" type="checkbox" />
+                        <span>
+                          <strong>启用出站代理</strong>
+                          <small>关闭时不走此处配置的代理（仍遵循系统 HTTP_PROXY/HTTPS_PROXY 环境变量）。</small>
+                        </span>
+                      </label>
+                    </div>
+                    <label class="field span-2"><span class="field-label">代理地址</span><input id="settings-proxy-url" type="text" placeholder="http://127.0.0.1:7890" spellcheck="false" /><span class="field-hint">支持 http://、https://、socks5:// 与 socks5h://，可带账号密码，如 http://user:pass@host:port。启用时必填。</span></label>
+                  </div>
+                  <div class="settings-save-row"><p id="proxy-settings-status" class="settings-inline-status" role="status"></p><button id="proxy-settings-save" type="submit">保存代理设置</button></div>
+                </form>
+              </section>
+
               <section class="settings-card" aria-labelledby="model-test-prompts-title">
                 <div class="settings-card-head"><div><h3 id="model-test-prompts-title">模型测试 Prompt</h3><p>测试窗口选择的 Prompt 模板；编辑后下次测试立即生效。</p></div><button id="new-model-test-prompt" type="button" class="secondary">新增 Prompt</button></div>
                 <div id="model-test-prompt-list" class="model-test-template-list" aria-live="polite"><p class="settings-loading">进入设置页后加载 Prompt。</p></div>
@@ -1172,12 +1191,17 @@
         <div class="modal-actions"><button id="model-test-prompt-cancel" type="button" class="secondary">取消</button><button type="submit">保存 Prompt</button></div>
       </form>
     </dialog>
-    <dialog id="group-dialog" class="upstream-dialog">
+    <dialog
+      id="group-dialog"
+      class="upstream-dialog group-dialog"
+      aria-labelledby="group-dialog-title"
+      aria-describedby="group-dialog-description"
+    >
       <form id="group-form" class="upstream-dialog-panel">
-        <header class="modal-head">
+        <header class="modal-head upstream-modal-head">
           <div>
             <h2 id="group-dialog-title">新增分组</h2>
-            <p class="modal-sub">分组用于隔离令牌可访问的渠道范围。</p>
+            <p id="group-dialog-description" class="modal-sub">分组用于隔离令牌可访问的渠道范围。</p>
           </div>
           <div class="modal-head-actions">
             <button id="group-dialog-close" type="button" class="secondary ghost icon-close" aria-label="关闭" title="关闭"><svg class="dialog-icon dialog-icon--close" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4L4 12"/></svg></button>
@@ -1199,7 +1223,7 @@
             </div>
           </section>
         </div>
-        <footer class="modal-foot">
+        <footer class="modal-footer">
           <button type="button" id="group-cancel" class="secondary">取消</button>
           <button type="submit" class="primary">保存</button>
         </footer>

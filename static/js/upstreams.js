@@ -480,22 +480,20 @@ function setUpstreamView(view) {
     if (viewGridBtn) viewGridBtn.setAttribute("aria-pressed", "true");
     if (viewListBtn) viewListBtn.setAttribute("aria-pressed", "false");
     renderCards();
+    reanchorUpstreamActionMenu();
   } else {
     if (upstreamTableWrap) upstreamTableWrap.hidden = false;
     if (upstreamCardsContainer) upstreamCardsContainer.hidden = true;
     if (viewGridBtn) viewGridBtn.setAttribute("aria-pressed", "false");
     if (viewListBtn) viewListBtn.setAttribute("aria-pressed", "true");
+    reanchorUpstreamActionMenu();
   }
 }
 
 function renderRows() {
-  const openMenuId = activeActionMenuButton && !upstreamActionMenu.hidden
-    ? Number(activeActionMenuButton.dataset.menuId)
-    : null;
-  if (activeActionMenuButton) {
-    activeActionMenuButton.setAttribute("aria-expanded", "false");
-    activeActionMenuButton = null;
-  }
+  const hadOpenMenu = openActionMenuUpstreamId !== null && !upstreamActionMenu.hidden;
+  // 锚点节点即将被 innerHTML 清掉，先松开引用，但保留 id 这个事实。
+  activeActionMenuButton = null;
 
   rows.innerHTML = "";
   renderUpstreamSummary();
@@ -628,21 +626,35 @@ function renderRows() {
   updateBatchToolbar();
   applyAllColumnVisibility();
 
-  if (openMenuId !== null) {
-    const replacement = rows.querySelector(`button[data-menu-id="${openMenuId}"]`);
-    if (replacement) {
-      activeActionMenuButton = replacement;
-      replacement.setAttribute("aria-expanded", "true");
-      window.requestAnimationFrame(positionUpstreamActionMenu);
-    } else {
-      closeUpstreamActionMenu();
-    }
-  }
-
   // Also update cards if in grid view
   if (currentUpstreamView === "grid") {
     renderCards();
   }
+  /* 必须等两个视图都渲染完再锚定。卡片视图下表格是 display:none，
+     此时锚到表格里的按钮会拿到全 0 的 rect，菜单被夹到 (8, 8)。 */
+  if (hadOpenMenu) {
+    reanchorUpstreamActionMenu();
+  }
+}
+
+/* 按渠道 id 把菜单重新绑到当前视图的触发按钮上。渲染会换掉按钮节点，
+   所以不能靠旧引用；这个渠道被筛掉或删掉了就关菜单。 */
+function reanchorUpstreamActionMenu() {
+  if (openActionMenuUpstreamId === null || upstreamActionMenu.hidden) return;
+  const scope = currentUpstreamView === "grid" ? upstreamCardsContainer : rows;
+  const trigger = scope?.querySelector(
+    `button[data-menu-id="${openActionMenuUpstreamId}"]`,
+  );
+  if (!trigger) {
+    closeUpstreamActionMenu();
+    return;
+  }
+  if (activeActionMenuButton && activeActionMenuButton !== trigger) {
+    activeActionMenuButton.setAttribute("aria-expanded", "false");
+  }
+  activeActionMenuButton = trigger;
+  trigger.setAttribute("aria-expanded", "true");
+  window.requestAnimationFrame(positionUpstreamActionMenu);
 }
 
 function formatMetric(num) {
@@ -650,6 +662,8 @@ function formatMetric(num) {
   if (num >= 1000) return (num / 1000).toFixed(1) + "k";
   return num.toString();
 }
+
+const CHANNEL_SPARK_VIEW = { width: 100, height: 40 };
 
 let sparklineGradientSeq = 0;
 
@@ -699,10 +713,72 @@ function renderSparkline(points) {
       <path d="${area}" fill="url(#${gradientId})" />
       <path d="${line}" fill="none" stroke="currentColor" stroke-width="1.5"
             vector-effect="non-scaling-stroke"/>
+      <line class="channel-spark-hover-guide" x1="0" y1="0" x2="0" y2="40" vector-effect="non-scaling-stroke" />
+      <circle class="channel-spark-hover-dot" r="2.5" cx="0" cy="0" />
+      <rect class="channel-spark-hit-area" x="0" y="0" width="100" height="40" />
     </svg>
+    <div class="channel-spark-tooltip" role="status" hidden></div>
   `;
 }
 
+function bindChannelSparklineInteraction(container, values) {
+  const svg = container?.querySelector(".sparkline-svg");
+  const hitArea = svg?.querySelector(".channel-spark-hit-area");
+  const guide = svg?.querySelector(".channel-spark-hover-guide");
+  const dot = svg?.querySelector(".channel-spark-hover-dot");
+  const tooltip = container?.querySelector(".channel-spark-tooltip");
+  if (!svg || !hitArea || !guide || !dot || !tooltip || !Array.isArray(values) || values.length < 2) return;
+  const { width, height } = CHANNEL_SPARK_VIEW;
+  let frameId = null;
+  let pendingEvent = null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const update = (event) => {
+    pendingEvent = event;
+    if (frameId != null) return;
+    frameId = window.requestAnimationFrame(() => {
+      frameId = null;
+      if (!pendingEvent) return;
+      const bounds = svg.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const ratio = Math.max(0, Math.min(1, (pendingEvent.clientX - bounds.left) / bounds.width));
+      const position = ratio * (values.length - 1);
+      const index = Math.min(values.length - 1, Math.floor(position));
+      const next = Math.min(values.length - 1, index + 1);
+      const progress = next === index ? 0 : position - index;
+      const value = values[index] + (values[next] - values[index]) * progress;
+      const x = ratio * width;
+      const y = height - ((value - min) / range) * (height - 5);
+      // 卡片宽度随窗口变化，缩放系数每帧重算，点才一直是圆的。
+      const dotScaleX = sparkDotScaleX(bounds, CHANNEL_SPARK_VIEW);
+      guide.setAttribute("x1", x);
+      guide.setAttribute("x2", x);
+      dot.setAttribute("transform", `scale(${dotScaleX} 1)`);
+      dot.setAttribute("cx", x / dotScaleX);
+      dot.setAttribute("cy", y);
+      tooltip.innerHTML = `<strong>请求量 (6h)</strong><span>${formatMetric(Math.round(value))}</span>`;
+      tooltip.hidden = false;
+      tooltip.style.left = `${Math.min(Math.max(6, x * bounds.width / width + 8), container.clientWidth - tooltip.offsetWidth - 6)}px`;
+      tooltip.style.top = `${Math.max(6, y * bounds.height / height - 32)}px`;
+    });
+  };
+  const clear = () => {
+    pendingEvent = null;
+    if (frameId != null) window.cancelAnimationFrame(frameId);
+    frameId = null;
+    tooltip.hidden = true;
+    svg.removeAttribute("data-hovering");
+  };
+  hitArea.addEventListener("pointerenter", (event) => {
+    svg.dataset.hovering = "true";
+    update(event);
+  });
+  hitArea.addEventListener("pointermove", update);
+  hitArea.addEventListener("pointerleave", clear);
+}
+
+/* 统计数据按渠道缓存。渠道列表每 N 秒轮询一次，但统计的变化远没有那么快，
 /* 统计数据按渠道缓存。渠道列表每 N 秒轮询一次，但统计的变化远没有那么快，
    而且每张卡一个请求。没有缓存的话，每轮刷新都要等 N 个请求回来才能重建卡片，
    那段空窗就是肉眼看到的闪烁。 */
@@ -723,6 +799,17 @@ function cachedUpstreamStats(upstreamId) {
   return entry.stats;
 }
 
+/* 渠道 24h 健康历史（逐小时成功率/延迟）与 stats 同节奏拉取：独立缓存、
+   同一个单飞 Promise，避免多一套轮询节奏。 */
+const upstreamHealthCache = new Map();
+
+function cachedUpstreamHealth(upstreamId) {
+  const entry = upstreamHealthCache.get(upstreamId);
+  if (!entry) return null;
+  if (Date.now() - entry.fetchedAt > UPSTREAM_STATS_TTL_MS) return null;
+  return entry.health;
+}
+
 /* 单飞（in-flight 去重）：缓存 60 秒后是所有渠道同时过期，而 renderCards 的
    触发点很密（定时刷新、SSE 事件、操作后重载）。过期瞬间几个触发点挤在一起，
    如果各自发请求，网络面板里就是 渠道数 × 触发次数 的一排 stats 并发。共享
@@ -733,9 +820,15 @@ let statsRefreshPromise = null;
 // the rest of the console. Returns whether the cache actually got refreshed.
 async function fetchAllUpstreamStats() {
   try {
-    const payload = await api("/api/admin/upstreams/stats");
+    const [payload, healthPayload] = await Promise.all([
+      api("/api/admin/upstreams/stats"),
+      api("/api/admin/upstreams/health?hours=24").catch(() => null),
+    ]);
     const byId = payload && typeof payload.stats === "object" && payload.stats !== null
       ? payload.stats
+      : {};
+    const healthById = healthPayload && typeof healthPayload.entries === "object"
+      ? healthPayload.entries
       : {};
     const fetchedAt = Date.now();
     /* 响应里没出现的渠道（还没有任何日志）也要写进缓存，否则它们永远是
@@ -751,12 +844,47 @@ async function fetchAllUpstreamStats() {
           avgTokensPer1M: Number(raw?.avgTokensPer1M) || 0,
         },
       });
+      const healthRaw = healthById[String(upstream.id)];
+      upstreamHealthCache.set(upstream.id, {
+        fetchedAt,
+        health: {
+          total: Number(healthRaw?.total) || 0,
+          errors: Number(healthRaw?.errors) || 0,
+          successRate: healthRaw && healthRaw.success_rate != null
+            ? Number(healthRaw.success_rate)
+            : null,
+          avgMs: Number(healthRaw?.avg_ms) || 0,
+          buckets: Array.isArray(healthRaw?.buckets) ? healthRaw.buckets : [],
+        },
+      });
     }
     return true;
   } catch (error) {
     /* 拉不到就先用旧缓存/占位显示，下个刷新周期自然重试。 */
     return false;
   }
+}
+
+/* 24h 健康迷你条形图：每根是一小时，高度按该小时请求量，颜色按错误占比。
+   没有流量的小时不画——留白比一根零高的柱更诚实。 */
+function renderHealthBars(health) {
+  const buckets = Array.isArray(health?.buckets) ? health.buckets : [];
+  if (!buckets.length) {
+    return '<div class="health-bars-empty">24h 无请求</div>';
+  }
+  const maxTotal = Math.max(...buckets.map((bucket) => Number(bucket.total) || 0), 1);
+  const bars = buckets.map((bucket) => {
+    const total = Number(bucket.total) || 0;
+    const errors = Number(bucket.errors) || 0;
+    const height = Math.max(12, Math.round((total / maxTotal) * 100));
+    const errorRatio = total > 0 ? errors / total : 1;
+    const tone = errorRatio === 0 ? "ok" : errorRatio < 0.5 ? "warn" : "bad";
+    const hour = new Date(Number(bucket.bucket_epoch) * 1000);
+    const label = `${String(hour.getHours()).padStart(2, "0")}:00 · ${total} 请求`
+      + (errors > 0 ? ` · 失败 ${errors}` : "");
+    return `<span class="health-bar health-bar--${tone}" style="height:${height}%" title="${escapeHtml(label)}"></span>`;
+  }).join("");
+  return `<div class="health-bars" role="img" aria-label="24 小时逐小时健康，共 ${health.total} 请求，失败 ${health.errors}">${bars}</div>`;
 }
 
 /* 同步渲染：统计只从缓存读。缓存是空的就先出骨架，等后台补齐后单独替换这张卡，
@@ -781,6 +909,20 @@ function createChannelCard(upstream) {
   const sixHourTotal = pending
     ? "—"
     : formatMetric(sparklineData.reduce((sum, n) => sum + n, 0));
+
+  // 24h 健康：在线率 + 平均耗时 + 逐小时条形。stats 未到时同样先出骨架。
+  const health = cachedUpstreamHealth(upstream.id);
+  const healthPending = health === null;
+  const hasTraffic = !healthPending && health.total > 0;
+  const successLabel = healthPending || health.successRate == null
+    ? "—"
+    : `${(health.successRate * 100).toFixed(1)}%`;
+  const successTone = healthPending || health.successRate == null
+    ? ""
+    : health.successRate >= 0.99 ? " is-ok" : health.successRate >= 0.9 ? " is-warn" : " is-bad";
+  const healthLatency = healthPending || !hasTraffic || !health.avgMs
+    ? "—"
+    : formatSeconds(health.avgMs);
 
   card.innerHTML = `
     <div class="channel-card-header">
@@ -822,6 +964,16 @@ function createChannelCard(upstream) {
       </div>
       ${renderSparkline(sparklineData)}
     </div>
+    <div class="channel-card-health">
+      <div class="sparkline-header">
+        <span class="sparkline-label">24h 健康</span>
+        <span class="health-summary">
+          <span class="health-stat${successTone}" title="24 小时成功率">在线率 ${successLabel}</span>
+          <span class="health-stat" title="24 小时平均耗时">均延迟 ${healthLatency}</span>
+        </span>
+      </div>
+      ${renderHealthBars(healthPending ? null : health)}
+    </div>
     <div class="channel-card-metrics">
       <div class="metric-tile">
         <span class="metric-label">总请求</span>
@@ -840,6 +992,7 @@ function createChannelCard(upstream) {
       查看详情 →
     </button>
   `;
+  bindChannelSparklineInteraction(card.querySelector(".channel-card-sparkline"), sparklineData);
 
   return card;
 }
@@ -866,7 +1019,7 @@ async function hydrateVisibleCardStats(upstreamList) {
     );
     if (!existing) continue;
     // 菜单开在这张卡上时先不动它，否则菜单会失去锚点。
-    if (existing.contains(activeActionMenuButton)) continue;
+    if (upstream.id === openActionMenuUpstreamId) continue;
     existing.replaceWith(createChannelCard(upstream));
   }
 }
@@ -920,7 +1073,7 @@ function renderCards() {
     existingCards.delete(upstream.id);
 
     let card;
-    if (existing && existing.contains(activeActionMenuButton)) {
+    if (existing && Number(existing.dataset.cardUpstreamId) === openActionMenuUpstreamId) {
       // 菜单开在这张卡上，保持这个节点，替换会让菜单丢掉锚点。
       card = existing;
     } else {
@@ -1030,6 +1183,7 @@ function openUpstreamActionMenu(button) {
 
   closeUpstreamActionMenu();
   activeActionMenuButton = button;
+  openActionMenuUpstreamId = Number(button.dataset.menuId);
   button.setAttribute("aria-expanded", "true");
   upstreamActionMenu.innerHTML = actionMenuMarkup(Number(button.dataset.menuId));
   upstreamActionMenu.style.visibility = "hidden";
@@ -1047,6 +1201,9 @@ function closeUpstreamActionMenu(restoreFocus = false) {
     button.setAttribute("aria-expanded", "false");
   }
   activeActionMenuButton = null;
+  openActionMenuUpstreamId = null;
+  upstreamActionMenu.style.removeProperty("left");
+  upstreamActionMenu.style.removeProperty("top");
   upstreamActionMenu.style.visibility = "";
   hidePopoverLayer(upstreamActionMenu);
   if (restoreFocus && button?.isConnected) {
@@ -1059,6 +1216,12 @@ function positionUpstreamActionMenu() {
     return;
   }
   const triggerRect = activeActionMenuButton.getBoundingClientRect();
+  /* 锚点脱离文档或落在 display:none 子树里时 rect 全为 0，按它算会把菜单
+     夹到视口角落。宁可关掉，也不要画在错误位置。 */
+  if (!activeActionMenuButton.isConnected || (!triggerRect.width && !triggerRect.height)) {
+    closeUpstreamActionMenu();
+    return;
+  }
   const menuRect = upstreamActionMenu.getBoundingClientRect();
   const viewportGap = 8;
   let left = triggerRect.right - menuRect.width;

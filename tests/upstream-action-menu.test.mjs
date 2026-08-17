@@ -105,6 +105,38 @@ test("upstream weight cell uses fixed and effective weight wording", () => {
   assert.match(dynamicMarkup, /有效权重 \/ 基础权重/);
 });
 
+test("spark dot compensation cancels the non-uniform viewBox stretch", () => {
+  const context = vm.createContext({});
+  vm.runInContext(extractFunction(read("static/js/bootstrap.js"), "sparkDotScaleX"), context);
+  const scaleFor = (bounds, view) => {
+    context.bounds = bounds;
+    context.view = view;
+    return vm.runInContext("sparkDotScaleX(bounds, view)", context);
+  };
+
+  /* 渠道卡片的实际情形：viewBox 100×40 画在 260×48px 上。横向缩放 2.6、
+     纵向 1.2，系数应为 1.2/2.6，圆点因此被横向压回圆形。 */
+  const channel = scaleFor({ width: 260, height: 48 }, { width: 100, height: 40 });
+  assert.ok(Math.abs(channel - (48 / 40) / (260 / 100)) < 1e-9);
+  assert.ok(channel < 1, "横向被拉伸时补偿系数必须小于 1");
+
+  // 横纵缩放一致时不需要补偿。
+  assert.equal(scaleFor({ width: 200, height: 80 }, { width: 100, height: 40 }), 1);
+
+  // 零尺寸（隐藏子树）不得产生除零或 Infinity。
+  assert.ok(Number.isFinite(scaleFor({ width: 0, height: 0 }, { width: 100, height: 40 })));
+});
+
+test("the channel sparkline dot applies the shared stretch compensation", () => {
+  const source = read("static/js/upstreams.js");
+  // 圆点必须带横向反向缩放，且 cx 除以同一系数抵消位移，否则点是椭圆。
+  assert.match(source, /const dotScaleX = sparkDotScaleX\(bounds, CHANNEL_SPARK_VIEW\)/);
+  assert.match(source, /dot\.setAttribute\("transform", `scale\(\$\{dotScaleX\} 1\)`\)/);
+  assert.match(source, /dot\.setAttribute\("cx", x \/ dotScaleX\)/);
+  // viewBox 尺寸集中在一处，hover 数学和 SVG 不会各写一套魔数。
+  assert.match(source, /const CHANNEL_SPARK_VIEW = \{ width: 100, height: 40 \}/);
+});
+
 test("the balance dialog head carries a refresh control", () => {
   const markup = read("static/admin.html");
   const dialog = markup.slice(

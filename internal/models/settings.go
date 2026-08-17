@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 )
@@ -181,6 +182,8 @@ type RuntimeSettings struct {
 	AutoWeightSuccessIncrement        int64  `json:"auto_weight_success_increment"`
 	AutoWeightRecoveryIncrement       int64  `json:"auto_weight_recovery_increment"`
 	AutoWeightRecoveryIntervalSeconds int64  `json:"auto_weight_recovery_interval_seconds"`
+	ProxyEnabled                      bool   `json:"proxy_enabled"`
+	ProxyURL                          string `json:"proxy_url"`
 	Revision                          int64  `json:"revision"`
 	UpdatedAt                         string `json:"updated_at"`
 	// DatabaseOverride records that these values came from SQLite rather than
@@ -200,6 +203,8 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		AutoWeightSuccessIncrement:        DefaultAutoWeightSuccessIncrement,
 		AutoWeightRecoveryIncrement:       DefaultAutoWeightRecoveryIncrement,
 		AutoWeightRecoveryIntervalSeconds: DefaultAutoWeightRecoveryIntervalSeconds,
+		ProxyEnabled:                      false,
+		ProxyURL:                          "",
 		Revision:                          0,
 		UpdatedAt:                         "",
 		DatabaseOverride:                  false,
@@ -226,20 +231,53 @@ func (s *RuntimeSettings) Validate() error {
 			return ErrString(check.message)
 		}
 	}
+	if err := validateProxyURL(s.ProxyURL, s.ProxyEnabled); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateProxyURL accepts an empty value only when the proxy is disabled, and
+// otherwise requires an absolute http/https/socks5 URL with a host.
+func validateProxyURL(value string, enabled bool) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		if enabled {
+			return ErrString("proxy_url is required when proxy_enabled is true")
+		}
+		return nil
+	}
+	if len(trimmed) > 500 {
+		return ErrString("proxy_url must be at most 500 bytes")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ErrString("proxy_url must be a valid URL")
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return ErrString("proxy_url scheme must be http, https, socks5, or socks5h")
+	}
+	if parsed.Host == "" {
+		return ErrString("proxy_url must include a host")
+	}
 	return nil
 }
 
 type RuntimeSettingsIn struct {
-	LogBodyKeepCount                  int64 `json:"log_body_keep_count"`
-	LogRetentionDays                  int64 `json:"log_retention_days"`
-	LogBodyMaxBytes                   int64 `json:"log_body_max_bytes"`
-	MaxRetries                        int64 `json:"max_retries"`
-	SameUpstreamRetryIntervalMs       int64 `json:"same_upstream_retry_interval_ms"`
-	AutoWeightFailurePenalty          int64 `json:"auto_weight_failure_penalty"`
-	AutoWeightSuccessIncrement        int64 `json:"auto_weight_success_increment"`
-	AutoWeightRecoveryIncrement       int64 `json:"auto_weight_recovery_increment"`
-	AutoWeightRecoveryIntervalSeconds int64 `json:"auto_weight_recovery_interval_seconds"`
-	Revision                          int64 `json:"revision"`
+	LogBodyKeepCount                  int64  `json:"log_body_keep_count"`
+	LogRetentionDays                  int64  `json:"log_retention_days"`
+	LogBodyMaxBytes                   int64  `json:"log_body_max_bytes"`
+	MaxRetries                        int64  `json:"max_retries"`
+	SameUpstreamRetryIntervalMs       int64  `json:"same_upstream_retry_interval_ms"`
+	AutoWeightFailurePenalty          int64  `json:"auto_weight_failure_penalty"`
+	AutoWeightSuccessIncrement        int64  `json:"auto_weight_success_increment"`
+	AutoWeightRecoveryIncrement       int64  `json:"auto_weight_recovery_increment"`
+	AutoWeightRecoveryIntervalSeconds int64  `json:"auto_weight_recovery_interval_seconds"`
+	ProxyEnabled                      bool   `json:"proxy_enabled"`
+	ProxyURL                          string `json:"proxy_url"`
+	Revision                          int64  `json:"revision"`
 }
 
 func (in *RuntimeSettingsIn) Validate() error {
@@ -256,6 +294,8 @@ func (in *RuntimeSettingsIn) Validate() error {
 	candidate.AutoWeightSuccessIncrement = in.AutoWeightSuccessIncrement
 	candidate.AutoWeightRecoveryIncrement = in.AutoWeightRecoveryIncrement
 	candidate.AutoWeightRecoveryIntervalSeconds = in.AutoWeightRecoveryIntervalSeconds
+	candidate.ProxyEnabled = in.ProxyEnabled
+	candidate.ProxyURL = in.ProxyURL
 	return candidate.Validate()
 }
 
@@ -269,6 +309,8 @@ type RuntimeSettingsOut struct {
 	AutoWeightSuccessIncrement        int64  `json:"auto_weight_success_increment"`
 	AutoWeightRecoveryIncrement       int64  `json:"auto_weight_recovery_increment"`
 	AutoWeightRecoveryIntervalSeconds int64  `json:"auto_weight_recovery_interval_seconds"`
+	ProxyEnabled                      bool   `json:"proxy_enabled"`
+	ProxyURL                          string `json:"proxy_url"`
 	Revision                          int64  `json:"revision"`
 	UpdatedAt                         string `json:"updated_at"`
 	DatabaseOverride                  bool   `json:"database_override"`
@@ -285,6 +327,8 @@ func NewRuntimeSettingsOut(s *RuntimeSettings) RuntimeSettingsOut {
 		AutoWeightSuccessIncrement:        s.AutoWeightSuccessIncrement,
 		AutoWeightRecoveryIncrement:       s.AutoWeightRecoveryIncrement,
 		AutoWeightRecoveryIntervalSeconds: s.AutoWeightRecoveryIntervalSeconds,
+		ProxyEnabled:                      s.ProxyEnabled,
+		ProxyURL:                          s.ProxyURL,
 		Revision:                          s.Revision,
 		UpdatedAt:                         s.UpdatedAt,
 		DatabaseOverride:                  s.DatabaseOverride,

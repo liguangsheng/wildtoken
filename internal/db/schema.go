@@ -160,6 +160,8 @@ func Init(ctx context.Context, db *sql.DB) error {
 		{"auto_weight_success_increment", "INTEGER NOT NULL DEFAULT 5 CHECK (auto_weight_success_increment BETWEEN 0 AND 100)"},
 		{"auto_weight_recovery_increment", "INTEGER NOT NULL DEFAULT 10 CHECK (auto_weight_recovery_increment BETWEEN 0 AND 100)"},
 		{"auto_weight_recovery_interval_seconds", "INTEGER NOT NULL DEFAULT 60 CHECK (auto_weight_recovery_interval_seconds BETWEEN 1 AND 3600)"},
+		{"proxy_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK (proxy_enabled IN (0, 1))"},
+		{"proxy_url", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := ensureColumn(ctx, db, "runtime_settings", column.name, column.definition); err != nil {
 			return err

@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -30,6 +32,11 @@ type LogOverviewOut struct {
 	AvgDurationMs  float64            `json:"avg_duration_ms"`
 	MinDurationMs  int64              `json:"min_duration_ms"`
 	MaxDurationMs  int64              `json:"max_duration_ms"`
+	// P50/P95/P99 是全窗口耗时的最近邻分位数。均值会被一条慢请求拉高，
+	// 分位数区分"普遍变慢"和"偶发超时"。无有效耗时时为 null。
+	P50DurationMs  *float64           `json:"p50_duration_ms"`
+	P95DurationMs  *float64           `json:"p95_duration_ms"`
+	P99DurationMs  *float64           `json:"p99_duration_ms"`
 	BucketSeconds  int64              `json:"bucket_seconds"`
 	LatencySeries  []LatencyBucketOut `json:"latency_series"`
 	// RequestSeries 按同一套分桶统计全部请求（不过滤耗时），是请求量趋势的
@@ -42,6 +49,11 @@ type LatencyBucketOut struct {
 	BucketEpoch int64   `json:"bucket_epoch"`
 	AvgMs       float64 `json:"avg_ms"`
 	Count       int64   `json:"count"`
+	// P50Ms/P95Ms/P99Ms are nearest-rank quantiles of the bucket's durations;
+	// null when the bucket has no timed rows.
+	P50Ms *float64 `json:"p50_ms,omitempty"`
+	P95Ms *float64 `json:"p95_ms,omitempty"`
+	P99Ms *float64 `json:"p99_ms,omitempty"`
 }
 
 // RequestBucketOut is one time bucket of the request-volume trend. Errors
@@ -231,7 +243,79 @@ func LogOverview(ctx context.Context, database *sql.DB,
 		out.PreviousTotal = &previousCounts.Total
 		out.PreviousStatus = &previousCounts
 	}
+
+	if err := fillLatencyQuantiles(ctx, database, &out, predicate.String(), predicateArgs); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// maxQuantileDurations bounds the rows the quantile pass buffers. Beyond it the
+// quantiles stay null rather than paying an unbounded scan+sort per console
+// load; retention normally keeps the window far below this.
+const maxQuantileDurations = 200_000
+
+// fillLatencyQuantiles walks the window's durations once, bucketed and sorted,
+// and fills nearest-rank P50/P95/P99 both per bucket and for the whole window.
+// SQLite has no percentile aggregate, and the row count is retention-bounded,
+// so computing in Go over one ordered scan is the cheap option.
+func fillLatencyQuantiles(ctx context.Context, database *sql.DB, out *LogOverviewOut,
+	predicate string, predicateArgs []any) error {
+	if out.DurationCount == 0 || out.DurationCount > maxQuantileDurations {
+		return nil
+	}
+
+	// ORDER BY bucket, duration keeps every bucket's slice sorted as scanned,
+	// so no per-bucket sort is needed; the window-wide slice is sorted once.
+	durationsQuery := `
+		SELECT (CAST(strftime('%s', created_at) AS INTEGER) / ?) * ? AS bucket_epoch, duration_ms
+		FROM request_logs
+		WHERE ` + predicate + ` AND duration_ms IS NOT NULL AND duration_ms >= 0
+		ORDER BY bucket_epoch ASC, duration_ms ASC`
+	args := append([]any{out.BucketSeconds, out.BucketSeconds}, predicateArgs...)
+	rows, err := database.QueryContext(ctx, durationsQuery, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byBucket := make(map[int64][]float64, len(out.LatencySeries))
+	all := make([]float64, 0, out.DurationCount)
+	for rows.Next() {
+		var epoch int64
+		var durationMs float64
+		if err := rows.Scan(&epoch, &durationMs); err != nil {
+			return err
+		}
+		byBucket[epoch] = append(byBucket[epoch], durationMs)
+		all = append(all, durationMs)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range out.LatencySeries {
+		bucket := &out.LatencySeries[i]
+		durations := byBucket[bucket.BucketEpoch]
+		if len(durations) == 0 {
+			continue
+		}
+		p50, p95, p99 := quantiles(durations)
+		bucket.P50Ms, bucket.P95Ms, bucket.P99Ms = &p50, &p95, &p99
+	}
+	slices.Sort(all)
+	p50, p95, p99 := quantiles(all)
+	out.P50DurationMs, out.P95DurationMs, out.P99DurationMs = &p50, &p95, &p99
+	return nil
+}
+
+// quantiles returns the nearest-rank P50/P95/P99 of an ascending-sorted slice.
+func quantiles(sorted []float64) (float64, float64, float64) {
+	rank := func(p float64) int {
+		index := int(math.Ceil(p * float64(len(sorted))))
+		return min(max(index, 1), len(sorted))
+	}
+	return sorted[rank(0.50)-1], sorted[rank(0.95)-1], sorted[rank(0.99)-1]
 }
 
 /*

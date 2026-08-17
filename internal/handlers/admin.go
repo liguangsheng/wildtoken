@@ -841,6 +841,24 @@ func AdminGetLogDetail(state *appstate.State) http.HandlerFunc {
 	}
 }
 
+// AdminUpstreamHealthHistory reports per-channel hourly success rate and
+// latency over the trailing hours (default 24), for the channel cards' mini
+// health trend.
+func AdminUpstreamHealthHistory(state *appstate.State) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hours := clampInt64(queryInt64(r.URL.Query().Get("hours"), 24), 1, 24*7)
+		health, err := db.UpstreamHealthHistory(r.Context(), state.DB, hours)
+		if err != nil {
+			apperr.WriteError(w, err)
+			return
+		}
+		apperr.WriteJSON(w, http.StatusOK, map[string]any{
+			"hours":   hours,
+			"entries": health,
+		})
+	}
+}
+
 func queryInt32(value string, fallback int32) int32 {
 	parsed, err := strconv.ParseInt(value, 10, 32)
 	if err != nil {

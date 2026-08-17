@@ -594,6 +594,12 @@ function setRoutingSettingsStatus(message = "", tone = "") {
   routingSettingsStatus.dataset.tone = tone;
 }
 
+function setProxySettingsStatus(message = "", tone = "") {
+  if (!proxySettingsStatus) return;
+  proxySettingsStatus.textContent = message;
+  proxySettingsStatus.dataset.tone = tone;
+}
+
 function updatePreferenceControls() {
   const theme = document.documentElement.getAttribute("data-theme") || getStoredTheme();
   const density = getDensity();
@@ -617,9 +623,12 @@ function fillServerSettings(settings) {
   settingsSuccessIncrement.value = settings.auto_weight_success_increment;
   settingsRecoveryIncrement.value = settings.auto_weight_recovery_increment;
   settingsRecoveryInterval.value = settings.auto_weight_recovery_interval_seconds;
+  if (settingsProxyEnabled) settingsProxyEnabled.checked = Boolean(settings.proxy_enabled);
+  if (settingsProxyUrl) settingsProxyUrl.value = settings.proxy_url || "";
   settingsRevision.textContent = `修订 ${settings.revision} · ${settings.updated_at || "刚刚更新"}`;
   setSettingsStatus("");
   setRoutingSettingsStatus("");
+  setProxySettingsStatus("");
 }
 
 function formatBytes(value) {
@@ -904,12 +913,16 @@ function runtimeSettingsPayload() {
     auto_weight_success_increment: Number(settingsSuccessIncrement.value),
     auto_weight_recovery_increment: Number(settingsRecoveryIncrement.value),
     auto_weight_recovery_interval_seconds: Number(settingsRecoveryInterval.value),
+    proxy_enabled: Boolean(settingsProxyEnabled?.checked),
+    proxy_url: (settingsProxyUrl?.value || "").trim(),
     revision: loadedServerSettings.revision,
   };
 }
 
+const nonIntegerSettingsKeys = new Set(["revision", "proxy_enabled", "proxy_url"]);
+
 function runtimeSettingsAreIntegers(payload) {
-  return Object.entries(payload).every(([key, value]) => key === "revision" || Number.isInteger(value));
+  return Object.entries(payload).every(([key, value]) => nonIntegerSettingsKeys.has(key) || Number.isInteger(value));
 }
 
 async function saveServerSettings(event) {
@@ -963,6 +976,37 @@ async function saveRoutingSettings(event) {
       setRoutingSettingsStatus("设置已被其他操作更新，已重新加载最新值；请确认后再保存。", "error");
     } else {
       setRoutingSettingsStatus("保存失败，请检查参数后重试。", "error");
+    }
+  } finally {
+    saveButton.disabled = false;
+  }
+}
+
+async function saveProxySettings(event) {
+  event.preventDefault();
+  if (!loadedServerSettings) return;
+  const payload = runtimeSettingsPayload();
+  if (payload.proxy_enabled && !payload.proxy_url) {
+    setProxySettingsStatus("启用代理时必须填写代理地址。", "error");
+    return;
+  }
+  if (payload.proxy_url && !/^(https?|socks5h?):\/\/.+/i.test(payload.proxy_url)) {
+    setProxySettingsStatus("代理地址必须以 http://、https://、socks5:// 或 socks5h:// 开头。", "error");
+    return;
+  }
+  const saveButton = document.querySelector("#proxy-settings-save");
+  saveButton.disabled = true;
+  setProxySettingsStatus("正在保存…");
+  try {
+    const updated = await api("/api/admin/settings", { method: "PUT", body: JSON.stringify(payload) });
+    fillServerSettings(updated);
+    setProxySettingsStatus(updated.proxy_enabled ? "代理设置已保存，出站请求将经过代理。" : "代理设置已保存，出站请求不走代理。", "ok");
+  } catch (error) {
+    if (error.status === 409) {
+      await loadSettingsPage();
+      setProxySettingsStatus("设置已被其他操作更新，已重新加载最新值；请确认后再保存。", "error");
+    } else {
+      setProxySettingsStatus("保存失败，请检查代理地址后重试。", "error");
     }
   } finally {
     saveButton.disabled = false;
