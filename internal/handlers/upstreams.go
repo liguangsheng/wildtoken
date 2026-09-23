@@ -369,7 +369,10 @@ func sendAndLogProbe(ctx context.Context, state *appstate.State, probe consolePr
 	if probe.model != nil {
 		usage = proxy.ExtractUsage(body, headers["content-type"])
 	}
-	responseSnapshot := proxy.SnapshotResponse(status, headers, body, logBodyMaxBytes)
+	// Generated images go to files; the log keeps their paths. The model test
+	// and the debug page are where images get tried out, so this path needs it
+	// as much as the proxy does.
+	responseSnapshot := proxy.SnapshotResponse(status, headers, state.Images.Rewrite(body), logBodyMaxBytes)
 
 	entry := newEntry()
 	entry.StatusCode = &statusCode

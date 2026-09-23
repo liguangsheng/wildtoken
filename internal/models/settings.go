@@ -207,6 +207,12 @@ const (
 	DefaultAutoWeightSuccessIncrement        int64 = 5
 	DefaultAutoWeightRecoveryIncrement       int64 = 10
 	DefaultAutoWeightRecoveryIntervalSeconds int64 = 60
+	// DefaultImageStorageMaxMB caps the directory generated images are saved
+	// to. 10 GiB holds several thousand images at the 1–2 MiB they usually are.
+	DefaultImageStorageMaxMB int64 = 10240
+	// MaxImageStorageMaxMB is 1 TiB: a typo'd extra digit should be rejected,
+	// not quietly let the directory fill the disk.
+	MaxImageStorageMaxMB int64 = 1 << 20
 )
 
 // RuntimeSettings is the operator-editable policy stored in SQLite.
@@ -225,9 +231,12 @@ type RuntimeSettings struct {
 	// DefaultUpstreamTimeoutSeconds is the fallback for channels that leave
 	// their own timeout unset. Zero means "inherit the startup config", so an
 	// operator who never touched it keeps whatever the deployment set.
-	DefaultUpstreamTimeoutSeconds int64  `json:"default_upstream_timeout_seconds"`
-	Revision                      int64  `json:"revision"`
-	UpdatedAt                     string `json:"updated_at"`
+	DefaultUpstreamTimeoutSeconds int64 `json:"default_upstream_timeout_seconds"`
+	// ImageStorageMaxMB caps the saved-image directory; the oldest files go
+	// first once it is exceeded. Zero turns saving off and empties it.
+	ImageStorageMaxMB int64  `json:"image_storage_max_mb"`
+	Revision          int64  `json:"revision"`
+	UpdatedAt         string `json:"updated_at"`
 	// DatabaseOverride records that these values came from SQLite rather than
 	// the startup defaults. It is not part of the stored row.
 	DatabaseOverride bool `json:"-"`
@@ -248,6 +257,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		ProxyEnabled:                      false,
 		ProxyURL:                          "",
 		DefaultUpstreamTimeoutSeconds:     0,
+		ImageStorageMaxMB:                 DefaultImageStorageMaxMB,
 		Revision:                          0,
 		UpdatedAt:                         "",
 		DatabaseOverride:                  false,
@@ -271,6 +281,7 @@ func (s *RuntimeSettings) Validate() error {
 		{s.AutoWeightRecoveryIntervalSeconds, 1, 3600, "auto_weight_recovery_interval_seconds must be between 1 and 3600"},
 		// 0 is "inherit"; anything set must be a sane forwarding timeout.
 		{s.DefaultUpstreamTimeoutSeconds, 0, 3600, "default_upstream_timeout_seconds must be between 0 and 3600"},
+		{s.ImageStorageMaxMB, 0, MaxImageStorageMaxMB, "image_storage_max_mb must be between 0 and 1048576"},
 	} {
 		if check.value < check.min || check.value > check.max {
 			return ErrString(check.message)
@@ -323,6 +334,7 @@ type RuntimeSettingsIn struct {
 	ProxyEnabled                      bool   `json:"proxy_enabled"`
 	ProxyURL                          string `json:"proxy_url"`
 	DefaultUpstreamTimeoutSeconds     int64  `json:"default_upstream_timeout_seconds"`
+	ImageStorageMaxMB                 int64  `json:"image_storage_max_mb"`
 	Revision                          int64  `json:"revision"`
 }
 
@@ -343,6 +355,7 @@ func (in *RuntimeSettingsIn) Validate() error {
 	candidate.ProxyEnabled = in.ProxyEnabled
 	candidate.ProxyURL = in.ProxyURL
 	candidate.DefaultUpstreamTimeoutSeconds = in.DefaultUpstreamTimeoutSeconds
+	candidate.ImageStorageMaxMB = in.ImageStorageMaxMB
 	return candidate.Validate()
 }
 
@@ -359,6 +372,7 @@ type RuntimeSettingsOut struct {
 	ProxyEnabled                      bool   `json:"proxy_enabled"`
 	ProxyURL                          string `json:"proxy_url"`
 	DefaultUpstreamTimeoutSeconds     int64  `json:"default_upstream_timeout_seconds"`
+	ImageStorageMaxMB                 int64  `json:"image_storage_max_mb"`
 	Revision                          int64  `json:"revision"`
 	UpdatedAt                         string `json:"updated_at"`
 	DatabaseOverride                  bool   `json:"database_override"`
@@ -378,6 +392,7 @@ func NewRuntimeSettingsOut(s *RuntimeSettings) RuntimeSettingsOut {
 		ProxyEnabled:                      s.ProxyEnabled,
 		ProxyURL:                          s.ProxyURL,
 		DefaultUpstreamTimeoutSeconds:     s.DefaultUpstreamTimeoutSeconds,
+		ImageStorageMaxMB:                 s.ImageStorageMaxMB,
 		Revision:                          s.Revision,
 		UpdatedAt:                         s.UpdatedAt,
 		DatabaseOverride:                  s.DatabaseOverride,

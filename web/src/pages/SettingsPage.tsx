@@ -360,6 +360,16 @@ export function SettingsPage({ onUnauthorized }: { onUnauthorized: (message: str
                       hint="设为 0 时只保留元数据和请求头，不采集正文。"
                       onChange={(v) => patch("log_body_max_bytes", v)}
                     />
+                    {/* 服务端按 MB 存，这里按 GB 填：图片目录的量级是 GB。 */}
+                    <NumberField
+                      className="span-2"
+                      label="生图图片存储上限（GB）"
+                      value={settings.image_storage_max_mb / 1024}
+                      min={0}
+                      max={1024}
+                      hint="生图结果另存为文件，日志里只留链接，链接可直接下载。超出上限时从最旧的图删起，约每五分钟检查一次。设为 0 不再保存，并清空已存的图。"
+                      onChange={(v) => patch("image_storage_max_mb", Math.round(v * 1024))}
+                    />
                   </div>
                   <div className="settings-save-row">
                     <p className="settings-inline-status" role="status">

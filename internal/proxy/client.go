@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/liguangsheng/wildtoken/internal/apperr"
+	"github.com/liguangsheng/wildtoken/internal/imagestore"
 	"github.com/liguangsheng/wildtoken/internal/metrics"
 	"github.com/liguangsheng/wildtoken/internal/models"
 )
@@ -326,11 +327,21 @@ type Response struct {
 
 // Deps are the shared services a proxied request needs.
 type Deps struct {
-	HTTPClient     *http.Client
-	AutoWeight     *AutoWeightManager
-	Metrics        *metrics.Runtime
-	LogWriter      *LogWriter
+	HTTPClient *http.Client
+	AutoWeight *AutoWeightManager
+	Metrics    *metrics.Runtime
+	LogWriter  *LogWriter
+	// Images moves generated images out of logged bodies into files. Nil or
+	// disabled leaves bodies as they are.
+	Images         *imagestore.Store
 	DefaultTimeout time.Duration
+}
+
+// IsImagePath reports whether a proxied path is an image endpoint
+// (images/generations, images/edits, …), whose responses carry base64 images.
+func IsImagePath(path string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(path, "/v1/"), "images/") ||
+		strings.HasPrefix(strings.TrimPrefix(path, "/"), "images/")
 }
 
 // RequestContext identifies the caller and the model for one proxied request.
@@ -429,8 +440,14 @@ func ProxyRequest(ctx context.Context, deps Deps, policy AutoWeightPolicy,
 		statusCode := int32(status)
 		entry.StatusCode = &statusCode
 
+		// An image stream is kept whole so its images can be saved; anything
+		// else keeps only the part the log can hold.
+		captureBytes := requestCtx.LogBodyMaxBytes
+		if deps.Images.Enabled() && IsImagePath(requestCtx.Path) {
+			captureBytes = max(captureBytes, imagestore.MaxCaptureBytes)
+		}
 		stream := newSSEStream(ctx, response.Body, attempt, start, status, responseHeaders,
-			requestCtx.LogBodyMaxBytes, entry, deps, policy, autoWeightEnabled, upstream.ID)
+			requestCtx.LogBodyMaxBytes, captureBytes, entry, deps, policy, autoWeightEnabled, upstream.ID)
 		return &Response{Status: status, Headers: responseHeaders, Body: stream}, nil
 	}
 
@@ -466,7 +483,7 @@ func ProxyRequest(ctx context.Context, deps Deps, policy AutoWeightPolicy,
 		deps.AutoWeight.RecordFailure(upstream.ID, autoWeightEnabled, policy)
 	}
 
-	responseSnapshot := SnapshotResponse(status, responseHeaders, bodyBytes,
+	responseSnapshot := SnapshotResponse(status, responseHeaders, deps.Images.Rewrite(bodyBytes),
 		requestCtx.LogBodyMaxBytes)
 	usage := ExtractUsage(bodyBytes, contentType)
 	isStream := bytes.HasPrefix(bodyBytes, []byte("data:")) ||

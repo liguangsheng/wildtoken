@@ -21,6 +21,7 @@ type Settings struct {
 	Upstream UpstreamSettings `toml:"upstream"`
 	Admin    AdminSettings    `toml:"admin"`
 	Themes   ThemeSettings    `toml:"themes"`
+	Images   ImageSettings    `toml:"images"`
 }
 
 type ServerSettings struct {
@@ -58,6 +59,13 @@ type ThemeSettings struct {
 	Dir string `toml:"dir"`
 }
 
+// ImageSettings is where generated images are saved. The size cap and the
+// on/off switch are runtime settings; only the location is startup config,
+// because moving it means moving files.
+type ImageSettings struct {
+	Dir string `toml:"dir"`
+}
+
 // Default returns the settings used when no file or environment overrides apply.
 func Default() Settings {
 	return Settings{
@@ -74,6 +82,7 @@ func Default() Settings {
 		Upstream: UpstreamSettings{DefaultTimeoutSeconds: 300.0},
 		Admin:    AdminSettings{Token: "change-me"},
 		Themes:   ThemeSettings{Dir: "themes"},
+		Images:   ImageSettings{Dir: "images"},
 	}
 }
 
@@ -109,6 +118,9 @@ func Load() (Settings, error) {
 	}
 	if dir := os.Getenv("WILDTOKEN_THEME_DIR"); dir != "" {
 		settings.Themes.Dir = dir
+	}
+	if dir := os.Getenv("WILDTOKEN_IMAGE_DIR"); dir != "" {
+		settings.Images.Dir = dir
 	}
 
 	return settings, nil
@@ -175,6 +187,7 @@ func applyEnvOverrides(settings *Settings) error {
 		{"APP__ADMIN__TOKEN", func(s *Settings, v string) error { s.Admin.Token = v; return nil }},
 		{"APP__ADMIN__CLIENT_IP_HEADER", func(s *Settings, v string) error { s.Admin.ClientIPHeader = v; return nil }},
 		{"APP__THEMES__DIR", func(s *Settings, v string) error { s.Themes.Dir = v; return nil }},
+		{"APP__IMAGES__DIR", func(s *Settings, v string) error { s.Images.Dir = v; return nil }},
 	}
 
 	for _, override := range overrides {

@@ -67,3 +67,13 @@ test("普通对话响应不受影响", () => {
   );
   assert.deepEqual(parsed.messages[0].blocks, [{ kind: "text", text: "hi" }]);
 });
+
+test("已存为文件的图带下载路径", () => {
+  const parsed = parseConversationResponse(JSON.stringify({ data: [{ b64_json: "@image:/images/2026-09-23/x.png" }] }));
+  const [image] = parsed.messages[0].blocks;
+
+  assert.equal(image.src, "/images/2026-09-23/x.png");
+  assert.equal(image.download, "/images/2026-09-23/x.png");
+  assert.match(image.text, /已存为文件/);
+  assert.equal(parsed.complete, true);
+});

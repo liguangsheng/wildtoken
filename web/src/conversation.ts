@@ -25,8 +25,11 @@ export type Block =
       input: unknown;
       result: { isError: boolean; text: string } | null;
     }
-  /** src 有值时直接画图（生图的结果）；没有时 text 是一句描述（请求里的图）。 */
-  | { kind: "image"; text: string; src?: string }
+  /**
+   * src 有值时直接画图（生图的结果）；没有时 text 是一句描述（请求里的图）。
+   * download 是服务端存下的文件路径，可直接下载。
+   */
+  | { kind: "image"; text: string; src?: string; download?: string }
   | { kind: "error"; text: string }
   | { kind: "other"; label: string; input: unknown };
 
@@ -767,9 +770,15 @@ function parseImageGenerationResponse(raw: string): Conversation | null {
       image.format?.toUpperCase() ?? "图片",
       image.bytes !== null ? formatBytes(image.bytes) : null,
       image.partialIndex !== null ? `中间帧 #${image.partialIndex}` : null,
+      image.stored ? "已存为文件" : null,
       image.truncated ? "日志正文被截断，只存下了这张图的前一部分，缺的部分显示为空白" : null,
     ].filter(Boolean);
-    blocks.push({ kind: "image", text: caption.join(" · "), src: image.src });
+    blocks.push({
+      kind: "image",
+      text: caption.join(" · "),
+      src: image.src,
+      ...(image.stored ? { download: image.src } : {}),
+    });
     if (image.revisedPrompt) blocks.push({ kind: "text", text: `改写后的 prompt：${image.revisedPrompt}` });
   }
 

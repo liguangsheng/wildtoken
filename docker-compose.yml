@@ -11,6 +11,8 @@ services:
       APP__UPSTREAM__DEFAULT_TIMEOUT_SECONDS: "300"
       WILDTOKEN_LOG: info
       WILDTOKEN_THEME_DIR: /app/themes
+      # 生图结果存成文件，和数据库同一个卷，重建容器不丢。
+      WILDTOKEN_IMAGE_DIR: /data/images
     ports:
       - "3100:3100"
     # 容器默认继承宿主机的解析器。部分上游域名的权威 NS 会拒绝一部分解析器的

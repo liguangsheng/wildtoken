@@ -37,6 +37,9 @@ func NewRouter(state *appstate.State) http.Handler {
 		noDirectoryListing(http.FileServer(http.Dir("static"))))))
 	router.Mount("/theme-packs", noStore(http.StripPrefix("/theme-packs",
 		serveThemePackCSS(state.Settings.Themes.Dir))))
+	// Saved generated images. Public on purpose: <img> and a pasted link cannot
+	// send the admin header, and the 128-bit random name is the access check.
+	router.Mount("/images", state.Images.Handler())
 
 	router.Group(func(admin chi.Router) {
 		admin.Use(middleware.RequireAdmin(state.Credentials, state.Settings.Admin.ClientIPHeader))

@@ -200,6 +200,44 @@ function ToolCallBlock({
   );
 }
 
+/**
+ * 生图结果。存下的文件会被存储上限清理掉，老日志里的路径随之失效；那时换成
+ * 一句说明，别留一个破图标让人以为出图失败。
+ */
+function ImageBlock({ src, text, download }: { src: string; text: string; download?: string }) {
+  const [missing, setMissing] = useState(false);
+
+  if (missing) {
+    return (
+      <div className="conv-block conv-block--image">
+        {download ? "图片文件已不在：超出存储上限后被清理了。" : "图片无法显示。"}
+        {` ${text}`}
+      </div>
+    );
+  }
+
+  return (
+    <figure className="conv-block conv-block--image conv-image">
+      <img src={src} alt={text} loading="lazy" onError={() => setMissing(true)} />
+      <figcaption>
+        {text}
+        {download ? (
+          <>
+            {" · "}
+            <a href={download} download>
+              下载
+            </a>
+            {" · "}
+            <a href={download} target="_blank" rel="noreferrer">
+              新标签打开
+            </a>
+          </>
+        ) : null}
+      </figcaption>
+    </figure>
+  );
+}
+
 function ConversationBlock({ block, role, fold }: { block: Block; role: string; fold: Fold }) {
   switch (block.kind) {
     case "text": {
@@ -276,14 +314,7 @@ function ConversationBlock({ block, role, fold }: { block: Block; role: string; 
       );
     }
     case "image":
-      if (block.src) {
-        return (
-          <figure className="conv-block conv-block--image conv-image">
-            <img src={block.src} alt={block.text} loading="lazy" />
-            <figcaption>{block.text}</figcaption>
-          </figure>
-        );
-      }
+      if (block.src) return <ImageBlock src={block.src} text={block.text} download={block.download} />;
       return <div className="conv-block conv-block--image">{block.text || "[图片]"}</div>;
     case "error":
       return <div className="conv-block conv-block--error">{block.text || "错误"}</div>;

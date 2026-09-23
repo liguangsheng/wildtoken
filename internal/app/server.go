@@ -18,6 +18,7 @@ import (
 	"github.com/liguangsheng/wildtoken/internal/authstate"
 	"github.com/liguangsheng/wildtoken/internal/config"
 	"github.com/liguangsheng/wildtoken/internal/db"
+	"github.com/liguangsheng/wildtoken/internal/imagestore"
 	"github.com/liguangsheng/wildtoken/internal/metrics"
 	"github.com/liguangsheng/wildtoken/internal/models"
 	"github.com/liguangsheng/wildtoken/internal/proxy"
@@ -126,9 +127,15 @@ func New(ctx context.Context) (*Server, error) {
 	// The client reads the proxy setting through the runtime store on every
 	// request, so a console edit applies to new connections without a restart.
 	state.HTTPClient = newHTTPClient(state.Runtime.Get)
+	state.Images = imagestore.New(settings.Images.Dir, func() bool {
+		return state.Runtime.Get().ImageStorageMaxMB > 0
+	})
 
 	go db.RunLogStatsRefreshLoop(jobsCtx, database, logStats, runtimeMetrics)
 	go proxy.RunCleanupLoop(jobsCtx, database, state.Runtime.Get, runtimeMetrics, logStats)
+	go imagestore.RunCleanupLoop(jobsCtx, state.Images, func() int64 {
+		return state.Runtime.Get().ImageStorageMaxMB << 20
+	})
 
 	bindAddr := net.JoinHostPort(settings.Server.Host,
 		fmt.Sprintf("%d", settings.Server.Port))

@@ -13,6 +13,7 @@ import (
 	"github.com/liguangsheng/wildtoken/internal/authstate"
 	"github.com/liguangsheng/wildtoken/internal/config"
 	"github.com/liguangsheng/wildtoken/internal/db"
+	"github.com/liguangsheng/wildtoken/internal/imagestore"
 	"github.com/liguangsheng/wildtoken/internal/metrics"
 	"github.com/liguangsheng/wildtoken/internal/models"
 	"github.com/liguangsheng/wildtoken/internal/proxy"
@@ -106,7 +107,10 @@ type State struct {
 	UpstreamRateLimiter *ratelimit.Limiter
 	// Quotas holds the usage that a token has committed to but that its stored
 	// total does not show yet, so admission weighs requests still in flight.
-	Quotas    *quota.Tracker
+	Quotas *quota.Tracker
+	// Images saves generated images out of logged responses. Nil when no
+	// directory is configured; every method treats nil as "off".
+	Images    *imagestore.Store
 	StartedAt time.Time
 }
 
@@ -127,6 +131,7 @@ func (s *State) ProxyDeps() proxy.Deps {
 		AutoWeight:     s.AutoWeight,
 		Metrics:        s.Metrics,
 		LogWriter:      s.LogWriter,
+		Images:         s.Images,
 		DefaultTimeout: time.Duration(s.EffectiveUpstreamTimeoutSeconds() * float64(time.Second)),
 	}
 }

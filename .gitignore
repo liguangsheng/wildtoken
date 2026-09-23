@@ -30,6 +30,7 @@ wildtoken.db*
 *.sqlite
 *.sqlite3
 data/
+/images/
 
 # Editors and operating systems
 .idea/

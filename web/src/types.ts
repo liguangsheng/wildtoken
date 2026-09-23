@@ -254,6 +254,8 @@ export interface RuntimeSettings {
   proxy_url: string;
   /** 0 表示沿用启动配置（SystemInfo.default_upstream_timeout_seconds）。 */
   default_upstream_timeout_seconds: number;
+  /** 生图结果另存为文件的目录上限，单位 MB。0 = 不保存并清空。 */
+  image_storage_max_mb: number;
   revision: number;
   updated_at: string;
 }

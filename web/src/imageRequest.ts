@@ -8,9 +8,15 @@
  * 日志详情也用这里的解析。日志正文有上限（默认 200KB，常见配置 1MB），一张
  * 图的 base64 经常超出，存下来的是截掉尾巴的 JSON；这时从残文里把 base64
  * 捞出来，标成截断。浏览器能画出残缺 PNG 的上半截，总比什么都看不到强。
+ *
+ * 服务端开了图片存储后，日志里的 b64_json 已换成 "@image:/images/…" 这样的
+ * 标记，图在文件里，按路径直接取。
  */
 
 type JSONObject = Record<string, unknown>;
+
+/** 服务端存图后留在 b64_json 里的前缀，后面是图片的下载路径。和 imagestore.Marker 一致。 */
+export const STORED_IMAGE_MARKER = "@image:";
 
 export function defaultImageBody(model: string, prompt: string): JSONObject {
   return { model, prompt, n: 1, size: "1024x1024" };
@@ -51,6 +57,8 @@ export interface ImageItem {
   revisedPrompt: string | null;
   /** base64 没收全：日志截断或流还没收完。bytes 是已有的部分。 */
   truncated: boolean;
+  /** 服务端已存成文件，src 是它的下载路径。 */
+  stored: boolean;
 }
 
 export interface ImageResult {
@@ -90,17 +98,36 @@ function fromBase64(
     partialIndex,
     revisedPrompt,
     truncated,
+    stored: false,
+  };
+}
+
+/** 已存成文件的图：格式看扩展名，大小不知道。 */
+function fromStored(value: string, partialIndex: number | null, revisedPrompt: string | null): ImageItem {
+  const src = value.slice(STORED_IMAGE_MARKER.length);
+  const extension = /\.([a-z0-9]+)$/i.exec(src)?.[1]?.toLowerCase() ?? null;
+  return {
+    src,
+    bytes: null,
+    format: extension === "jpg" ? "jpeg" : extension,
+    partialIndex,
+    revisedPrompt,
+    truncated: false,
+    stored: true,
   };
 }
 
 function fromEntry(entry: JSONObject, partialIndex: number | null): ImageItem | null {
   const revisedPrompt = typeof entry.revised_prompt === "string" ? entry.revised_prompt : null;
 
+  if (typeof entry.b64_json === "string" && entry.b64_json.startsWith(STORED_IMAGE_MARKER)) {
+    return fromStored(entry.b64_json, partialIndex, revisedPrompt);
+  }
   if (typeof entry.b64_json === "string" && entry.b64_json) {
     return fromBase64(entry.b64_json, partialIndex, revisedPrompt, false);
   }
   if (typeof entry.url === "string" && entry.url) {
-    return { src: entry.url, bytes: null, format: null, partialIndex, revisedPrompt, truncated: false };
+    return { src: entry.url, bytes: null, format: null, partialIndex, revisedPrompt, truncated: false, stored: false };
   }
   return null;
 }
@@ -114,8 +141,13 @@ function salvageImages(text: string, partialIndex: number | null): ImageItem[] {
   for (const match of text.matchAll(/"(b64_json|url)"\s*:\s*"([^"]*)("?)/g)) {
     const [, key, value, quote] = match;
     if (!value) continue;
-    if (key === "b64_json") images.push(fromBase64(value, partialIndex, null, quote === ""));
-    else if (quote) images.push({ src: value, bytes: null, format: null, partialIndex, revisedPrompt: null, truncated: false });
+    if (key === "b64_json" && value.startsWith(STORED_IMAGE_MARKER)) {
+      if (quote) images.push(fromStored(value, partialIndex, null));
+    } else if (key === "b64_json") {
+      images.push(fromBase64(value, partialIndex, null, quote === ""));
+    } else if (quote) {
+      images.push({ src: value, bytes: null, format: null, partialIndex, revisedPrompt: null, truncated: false, stored: false });
+    }
   }
   return images;
 }

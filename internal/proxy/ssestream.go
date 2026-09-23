@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"sync"
 	"time"
@@ -45,14 +46,14 @@ type sseStream struct {
 
 func newSSEStream(requestCtx context.Context, upstream io.ReadCloser, attempt *attemptTimeout,
 	start time.Time, status int,
-	responseHeaders map[string]string, logBodyMaxBytes int, entry LogEntry,
+	responseHeaders map[string]string, logBodyMaxBytes, captureBytes int, entry LogEntry,
 	deps Deps, policy AutoWeightPolicy, autoWeightEnabled bool, upstreamID int64) *sseStream {
 	deps.Metrics.StartSSEStream()
 	return &sseStream{
 		upstream:          upstream,
 		requestCtx:        requestCtx,
 		attempt:           attempt,
-		capture:           newResponseCapture(logBodyMaxBytes),
+		capture:           newResponseCapture(captureBytes),
 		observation:       &sseObservation{},
 		start:             start,
 		upstreamStatus:    status,
@@ -175,6 +176,20 @@ func (s *sseStream) finishInterrupted(err error) {
 
 // finishLog writes the request log once. It reports false when another path
 // already logged this stream.
+// snapshotResponse builds the logged response. An image stream is captured
+// whole so its images can be saved as files; the log body cap then applies to
+// what is left. A capture that ran past its bound is logged as before, since a
+// cut-off event cannot be decoded.
+func (s *sseStream) snapshotResponse() json.RawMessage {
+	body, byteLength := s.capture.bytes, s.capture.byteLength
+	if byteLength == len(body) {
+		body = s.deps.Images.Rewrite(body)
+		byteLength = len(body)
+	}
+	return SnapshotResponseWithBodyLength(s.upstreamStatus, s.responseHeaders,
+		body, byteLength, s.logBodyMaxBytes)
+}
+
 func (s *sseStream) finishLog(statusCode int32, streamError *string) bool {
 	s.mu.Lock()
 	entry := s.entry
@@ -187,8 +202,7 @@ func (s *sseStream) finishLog(statusCode int32, streamError *string) bool {
 
 	s.observation.finish(s.measure)
 	usage := s.observation.usage
-	responseSnapshot := SnapshotResponseWithBodyLength(s.upstreamStatus, s.responseHeaders,
-		s.capture.bytes, s.capture.byteLength, s.logBodyMaxBytes)
+	responseSnapshot := s.snapshotResponse()
 
 	entry.StatusCode = &statusCode
 	entry.ResponseReasoningEffort = s.observation.responseReasoningEffort

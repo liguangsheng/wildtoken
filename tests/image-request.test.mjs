@@ -97,3 +97,21 @@ test("完整响应里的长 base64 折成占位，收尾引号缺失的也折", 
   // 短字符串不动。
   assert.equal(collapseBase64('{"model":"gpt-image"}'), '{"model":"gpt-image"}');
 });
+
+test("服务端存成文件的图：b64_json 是 @image: 标记，按路径取", () => {
+  const raw = JSON.stringify({ data: [{ b64_json: "@image:/images/2026-09-23/abc.jpg", revised_prompt: "cat" }] });
+  const [image] = parseImageResponse(raw).images;
+
+  assert.equal(image.src, "/images/2026-09-23/abc.jpg");
+  assert.equal(image.stored, true);
+  assert.equal(image.format, "jpeg");
+  assert.equal(image.bytes, null);
+  assert.equal(image.revisedPrompt, "cat");
+});
+
+test("截断的日志里，完整的标记照样认；没收全的标记丢掉", () => {
+  const images = parseImageResponse(
+    '{"data":[{"b64_json":"@image:/images/d/a.png"},{"b64_json":"@image:/images/d/b',
+  ).images;
+  assert.deepEqual(images.map((image) => image.src), ["/images/d/a.png"]);
+});

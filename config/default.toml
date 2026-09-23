@@ -25,3 +25,8 @@ token = "change-me"
 
 [themes]
 dir = "themes"
+
+# Generated images extracted from logged responses. Size cap is a runtime
+# setting (console → 设置).
+[images]
+dir = "images"
