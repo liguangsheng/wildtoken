@@ -326,6 +326,7 @@ function ImageFigure({ image, name, index }: { image: ImageItem; name: string; i
     image.format?.toUpperCase() ?? null,
     image.bytes !== null ? formatBytes(image.bytes) : null,
     image.partialIndex !== null ? `中间帧 #${image.partialIndex}` : null,
+    image.truncated ? "未收全" : null,
   ].filter(Boolean);
 
   const img = (
@@ -349,7 +350,7 @@ function ImageFigure({ image, name, index }: { image: ImageItem; name: string; i
       )}
       <figcaption>
         <span>{meta.join(" · ")}</span>
-        {image.partialIndex === null ? (
+        {image.partialIndex === null && !image.truncated ? (
           <a href={image.src} download={`${name}-${index + 1}.${image.format ?? "png"}`}>
             下载
           </a>

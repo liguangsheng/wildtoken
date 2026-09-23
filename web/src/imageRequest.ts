@@ -4,6 +4,10 @@
  * 请求体是唯一的状态来源：表单控件从它读、往它写，手改 JSON 和点控件是同
  * 一件事。响应按 OpenAI images 的两种形状解析——非流式的 data[]，和流式的
  * image_generation.partial_image / completed 事件。
+ *
+ * 日志详情也用这里的解析。日志正文有上限（默认 200KB，常见配置 1MB），一张
+ * 图的 base64 经常超出，存下来的是截掉尾巴的 JSON；这时从残文里把 base64
+ * 捞出来，标成截断。浏览器能画出残缺 PNG 的上半截，总比什么都看不到强。
  */
 
 type JSONObject = Record<string, unknown>;
@@ -45,6 +49,8 @@ export interface ImageItem {
   /** 流式中间帧的序号；最终图为 null。 */
   partialIndex: number | null;
   revisedPrompt: string | null;
+  /** base64 没收全：日志截断或流还没收完。bytes 是已有的部分。 */
+  truncated: boolean;
 }
 
 export interface ImageResult {
@@ -68,23 +74,50 @@ function base64Bytes(b64: string): number {
   return Math.floor((b64.length * 3) / 4) - padding;
 }
 
+function fromBase64(
+  b64: string,
+  partialIndex: number | null,
+  revisedPrompt: string | null,
+  truncated: boolean,
+): ImageItem {
+  // 截断的 base64 按 4 字符对齐，否则整段解码失败，连上半截都画不出。
+  const usable = truncated ? b64.slice(0, b64.length - (b64.length % 4)) : b64;
+  const format = sniffFormat(usable);
+  return {
+    src: `data:image/${format ?? "png"};base64,${usable}`,
+    bytes: base64Bytes(usable),
+    format,
+    partialIndex,
+    revisedPrompt,
+    truncated,
+  };
+}
+
 function fromEntry(entry: JSONObject, partialIndex: number | null): ImageItem | null {
   const revisedPrompt = typeof entry.revised_prompt === "string" ? entry.revised_prompt : null;
 
   if (typeof entry.b64_json === "string" && entry.b64_json) {
-    const format = sniffFormat(entry.b64_json);
-    return {
-      src: `data:image/${format ?? "png"};base64,${entry.b64_json}`,
-      bytes: base64Bytes(entry.b64_json),
-      format,
-      partialIndex,
-      revisedPrompt,
-    };
+    return fromBase64(entry.b64_json, partialIndex, revisedPrompt, false);
   }
   if (typeof entry.url === "string" && entry.url) {
-    return { src: entry.url, bytes: null, format: null, partialIndex, revisedPrompt };
+    return { src: entry.url, bytes: null, format: null, partialIndex, revisedPrompt, truncated: false };
   }
   return null;
+}
+
+/**
+ * 从解析不了的残文里捞图：逐个找 "b64_json":"… 和 "url":"…"。没有收尾引号
+ * 的 base64 就是被截断的那张；没收全的 url 用不了，丢掉。
+ */
+function salvageImages(text: string, partialIndex: number | null): ImageItem[] {
+  const images: ImageItem[] = [];
+  for (const match of text.matchAll(/"(b64_json|url)"\s*:\s*"([^"]*)("?)/g)) {
+    const [, key, value, quote] = match;
+    if (!value) continue;
+    if (key === "b64_json") images.push(fromBase64(value, partialIndex, null, quote === ""));
+    else if (quote) images.push({ src: value, bytes: null, format: null, partialIndex, revisedPrompt: null, truncated: false });
+  }
+  return images;
 }
 
 function errorMessage(value: unknown): string | null {
@@ -117,7 +150,10 @@ export function parseImageResponse(raw: string): ImageResult {
       try {
         event = JSON.parse(data) as JSONObject;
       } catch {
-        // 还没收全的最后一行。
+        // 还没收全的最后一行：流还在收，或者日志把它截断了。能捞就捞。
+        const partial = /"type"\s*:\s*"image_generation\.partial_image"/.test(data);
+        const index = Number(/"partial_image_index"\s*:\s*(\d+)/.exec(data)?.[1] ?? 0);
+        result.images.push(...salvageImages(data, partial ? index : null));
         continue;
       }
 
@@ -135,6 +171,7 @@ export function parseImageResponse(raw: string): ImageResult {
   try {
     body = JSON.parse(text) as JSONObject;
   } catch {
+    result.images = salvageImages(text, null);
     return result;
   }
   result.error = errorMessage(body);

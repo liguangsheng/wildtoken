@@ -4,7 +4,13 @@
  * 超过它，截断保留开头、丢弃结尾。所以标准 JSON.parse 对绝大多数日志都会失败,
  * 下面这套扫描器的存在意义就是从残缺 JSON 里尽量多地抢救出消息。
  *
+ * 生图请求没有 messages，只有 prompt；它的响应是图而不是文字。两者也按会话
+ * 摊开：prompt 算用户消息，图算助手回复。
+ *
  * 纯函数，不碰 DOM。渲染在 components/Conversation.tsx。 */
+
+// 带 .ts 扩展名：测试用 node 直接加载这个文件，node 的 ESM 不补扩展名。
+import { formatBytes, parseImageResponse } from "./imageRequest.ts";
 
 export type Block =
   | { kind: "text"; text: string }
@@ -19,7 +25,8 @@ export type Block =
       input: unknown;
       result: { isError: boolean; text: string } | null;
     }
-  | { kind: "image"; text: string }
+  /** src 有值时直接画图（生图的结果）；没有时 text 是一句描述（请求里的图）。 */
+  | { kind: "image"; text: string; src?: string }
   | { kind: "error"; text: string }
   | { kind: "other"; label: string; input: unknown };
 
@@ -450,6 +457,30 @@ export function pairToolCalls(messages: Message[]): Message[] {
   return out;
 }
 
+/**
+ * 生图请求：prompt 是用户消息，其余参数（尺寸、数量、质量…）排成一行附在
+ * 后面——看一条生图日志，最先想知道的就是「画了什么、按什么参数画」。
+ */
+function parseImageGenerationRequest(body: JSONObject, complete: boolean): Conversation | null {
+  if (typeof body.prompt !== "string") return null;
+
+  const params = Object.entries(body)
+    .filter(([key]) => key !== "model" && key !== "prompt")
+    .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+  const blocks: Block[] = [{ kind: "text", text: body.prompt }];
+  if (params.length > 0) blocks.push({ kind: "text", text: `参数：${params.join(" · ")}` });
+
+  return {
+    kind: "request",
+    model: typeof body.model === "string" ? body.model : null,
+    messages: [{ role: "user", blocks }],
+    toolCount: 0,
+    stopReason: null,
+    stream: body.stream === true,
+    complete,
+  };
+}
+
 /** 返回 null 表示这不是一个能识别的会话请求。 */
 export function parseConversationRequest(bodyText: string): Conversation | null {
   const root = parseLenientRoot(bodyText, ["messages", "input"]);
@@ -461,7 +492,7 @@ export function parseConversationRequest(bodyText: string): Conversation | null 
     : Array.isArray(body.input)
       ? body.input
       : null;
-  if (!rawMessages) return null;
+  if (!rawMessages) return parseImageGenerationRequest(body, root.complete);
 
   const messages: Message[] = [];
   const system = normalizeSystemPrompt(body.system, body.instructions);
@@ -719,10 +750,47 @@ function parseNonStreamResponse(body: JSONObject): Assembled | null {
   return null;
 }
 
+/**
+ * 生图响应：每张图一个图片块，附格式、大小；日志截断了的标出来，免得把只剩
+ * 上半截的图当成出图有问题。
+ */
+function parseImageGenerationResponse(raw: string): Conversation | null {
+  // 先粗筛，别让每条对话日志都过一遍图片解析。
+  if (!/"b64_json"|image_generation\.|"data"\s*:\s*\[\s*\{\s*"url"/.test(raw)) return null;
+
+  const result = parseImageResponse(raw);
+  if (result.images.length === 0) return null;
+
+  const blocks: Block[] = [];
+  for (const image of result.images) {
+    const caption = [
+      image.format?.toUpperCase() ?? "图片",
+      image.bytes !== null ? formatBytes(image.bytes) : null,
+      image.partialIndex !== null ? `中间帧 #${image.partialIndex}` : null,
+      image.truncated ? "日志正文被截断，只存下了这张图的前一部分，缺的部分显示为空白" : null,
+    ].filter(Boolean);
+    blocks.push({ kind: "image", text: caption.join(" · "), src: image.src });
+    if (image.revisedPrompt) blocks.push({ kind: "text", text: `改写后的 prompt：${image.revisedPrompt}` });
+  }
+
+  return {
+    kind: "response",
+    model: null,
+    messages: [{ role: "assistant", blocks }],
+    toolCount: 0,
+    stopReason: null,
+    stream: /^data:/m.test(raw),
+    complete: !result.images.some((image) => image.truncated),
+  };
+}
+
 /** 返回 null 表示识别不了。 */
 export function parseConversationResponse(bodyText: string): Conversation | null {
   const raw = String(bodyText || "").trim();
   if (!raw) return null;
+
+  const images = parseImageGenerationResponse(raw);
+  if (images) return images;
 
   if (/^data:/m.test(raw)) {
     const payloads = readSsePayloads(raw);

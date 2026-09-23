@@ -276,6 +276,14 @@ function ConversationBlock({ block, role, fold }: { block: Block; role: string; 
       );
     }
     case "image":
+      if (block.src) {
+        return (
+          <figure className="conv-block conv-block--image conv-image">
+            <img src={block.src} alt={block.text} loading="lazy" />
+            <figcaption>{block.text}</figcaption>
+          </figure>
+        );
+      }
       return <div className="conv-block conv-block--image">{block.text || "[图片]"}</div>;
     case "error":
       return <div className="conv-block conv-block--error">{block.text || "错误"}</div>;

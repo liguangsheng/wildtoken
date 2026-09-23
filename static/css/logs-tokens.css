@@ -992,6 +992,26 @@ details.conv-block[open] > summary::before { content: "▾"; }
 
 .conv-block--error { color: var(--danger); }
 
+/* 生图结果直接画出来。棋盘格垫底：透明背景的图、日志截断后空着的下半截，
+   都要看得出边界。 */
+.conv-image {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.conv-image img {
+  background: repeating-conic-gradient(var(--panel-muted) 0% 25%, var(--panel-subtle) 0% 50%) 0 0 / 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: block;
+  height: auto;
+  max-height: 560px;
+  max-width: 100%;
+  object-fit: contain;
+  width: auto;
+}
+
 .conv-empty,
 .conv-truncated {
   border: 1px solid var(--code-border);

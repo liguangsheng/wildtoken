@@ -57,7 +57,7 @@ test("上游错误体解析出 message", () => {
   assert.equal(parseImageResponse('{"error":{"message":"bad size"}}').error, "bad size");
 });
 
-test("流式：中间帧带序号，最终图没有；最后一行没收全时跳过", () => {
+test("流式：中间帧带序号，最终图没有；没收全的最后一行捞成截断的中间帧", () => {
   const raw = [
     "event: image_generation.partial_image",
     `data: ${JSON.stringify({ type: "image_generation.partial_image", partial_image_index: 0, b64_json: PNG })}`,
@@ -69,8 +69,25 @@ test("流式：中间帧带序号，最终图没有；最后一行没收全时�
   ].join("\n");
   const result = parseImageResponse(raw);
 
-  assert.deepEqual(result.images.map((image) => image.partialIndex), [0, null]);
+  assert.deepEqual(result.images.map((image) => image.partialIndex), [0, null, 0]);
+  assert.deepEqual(result.images.map((image) => image.truncated), [false, false, true]);
   assert.deepEqual(result.usage, { total_tokens: 5 });
+});
+
+test("日志截断的非流式响应：捞出残缺 base64，按 4 字符对齐并标成截断", () => {
+  // 日志只存了前面一段：b64_json 没有收尾引号，后面的 usage 也丢了。
+  const cut = PNG.slice(0, 42);
+  const result = parseImageResponse(`{"created":1,"data":[{"b64_json":"${cut}`);
+
+  assert.equal(result.images.length, 1);
+  assert.equal(result.images[0].truncated, true);
+  assert.equal(result.images[0].format, "png");
+  assert.ok(result.images[0].src.endsWith(`,${cut.slice(0, 40)}`), "应截到 4 的倍数");
+});
+
+test("截断发生在第二张图时，第一张完整、第二张截断", () => {
+  const result = parseImageResponse(`{"data":[{"b64_json":"${PNG}"},{"b64_json":"${PNG.slice(0, 20)}`);
+  assert.deepEqual(result.images.map((image) => image.truncated), [false, true]);
 });
 
 test("完整响应里的长 base64 折成占位，收尾引号缺失的也折", () => {
