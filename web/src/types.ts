@@ -369,4 +369,6 @@ export interface APIToken {
   group_name: string;
   quota: QuotaState;
   rate_limit: string | null;
+  /** 空数组表示不限模型。结尾的 * 按前缀匹配。 */
+  allowed_models: string[];
 }

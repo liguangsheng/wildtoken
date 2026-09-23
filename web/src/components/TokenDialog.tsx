@@ -13,8 +13,20 @@ export interface TokenPayload {
   /** “100M”“1B”这类表达式，空串表示不限额。后端负责解析。 */
   limit_expression: string;
   rate_limit: string | null;
+  /** 空数组表示不限模型。 */
+  allowed_models: string[];
   /** 只在新建时允许，留空由后端生成。 */
   token?: string | null;
+}
+
+/** 逗号或换行分隔，去空去重。大小写去重交给后端。 */
+function splitModels(value: string): string[] {
+  const seen = new Set<string>();
+  for (const part of value.split(/[,\n]/)) {
+    const trimmed = part.trim();
+    if (trimmed) seen.add(trimmed);
+  }
+  return [...seen];
 }
 
 /** 快捷档。填进输入框而不是替代它——填完还能接着改。 */
@@ -62,6 +74,7 @@ export function TokenDialog({
   const [groupId, setGroupId] = useState(1);
   const [limit, setLimit] = useState("");
   const [rateLimit, setRateLimit] = useState("");
+  const [allowedModels, setAllowedModels] = useState("");
   const [custom, setCustom] = useState("");
 
   useEffect(() => {
@@ -73,6 +86,7 @@ export function TokenDialog({
     // 回填服务端算好的最短表达式，这样不动表单再保存不会改变限额。
     setLimit(token?.quota.limit_expression ?? "");
     setRateLimit(token?.rate_limit ?? "");
+    setAllowedModels((token?.allowed_models ?? []).join("\n"));
     setCustom("");
     // 编辑时把现有到期时间填回输入框，保存时原样解回去，不动就不会变。
     setExpires(expiryInputValue(token?.expires_at ?? null));
@@ -105,6 +119,7 @@ export function TokenDialog({
             group_id: groupId,
             limit_expression: limit.trim(),
             rate_limit: rateLimit.trim() || null,
+            allowed_models: splitModels(allowedModels),
             ...(token ? {} : { token: custom.trim() || null }),
           });
         }}
@@ -224,6 +239,30 @@ export function TokenDialog({
                   spellCheck={false}
                 />
                 <span className="field-hint">按请求次数限速，单位支持 s/m/h/d。</span>
+              </label>
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div className="form-section-head">
+              <div>
+                <h3>模型限制</h3>
+                <p>留空则可以请求分组内的任意模型。</p>
+              </div>
+            </div>
+            <div className="form-grid">
+              <label className="field span-2">
+                <span className="field-label">允许的模型（可选）</span>
+                <textarea
+                  rows={4}
+                  spellCheck={false}
+                  value={allowedModels}
+                  onChange={(e) => setAllowedModels(e.target.value)}
+                  placeholder={"gpt-4o\nclaude-*"}
+                />
+                <span className="field-hint">
+                  每行或逗号分隔一个，不区分大小写；结尾加 * 按前缀匹配。不在列表里的模型会被 403 拒绝，/v1/models 也只列出允许的。
+                </span>
               </label>
             </div>
           </section>

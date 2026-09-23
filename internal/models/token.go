@@ -22,6 +22,10 @@ const (
 	// empty, or too long.
 	APITokenMinBytes = 1
 	APITokenMaxBytes = 256
+
+	// Bounds on a token's model allowlist.
+	APITokenAllowedModelsMax     = 500
+	APITokenAllowedModelMaxChars = 200
 )
 
 // TimestampFormat is the shape SQLite's `datetime('now')` produces, and the only
@@ -81,6 +85,8 @@ type APITokenRow struct {
 	UsedTokens  int64
 	LimitTokens *int64
 	RateLimit   *string
+	// AllowedModels is the JSON array string, "[]" when unrestricted.
+	AllowedModels string
 }
 
 // APITokenIn is the create payload. A nil Token means "generate one".
@@ -98,6 +104,9 @@ type APITokenIn struct {
 	LimitExpression string `json:"limit_expression"`
 	// RateLimit is a rate limit expression such as "100/m" or "1000/h". Blank means no limit.
 	RateLimit *string `json:"rate_limit"`
+	// AllowedModels restricts which models this token may request. Empty means
+	// any. A trailing "*" matches by prefix: "gpt-4*" covers "gpt-4o".
+	AllowedModels []string `json:"allowed_models"`
 }
 
 // APITokenUpdateIn is a full replacement, so an absent `expires_at` clears the
@@ -116,6 +125,9 @@ type APITokenUpdateIn struct {
 	LimitExpression string `json:"limit_expression"`
 	// RateLimit is a rate limit expression such as "100/m" or "1000/h". Blank means no limit.
 	RateLimit *string `json:"rate_limit"`
+	// AllowedModels restricts which models this token may request. Empty means
+	// any. A trailing "*" matches by prefix: "gpt-4*" covers "gpt-4o".
+	AllowedModels []string `json:"allowed_models"`
 }
 
 // RequestedToken is the replacement value, or "" when this edit keeps the
@@ -145,6 +157,66 @@ func NormalizeRateLimit(raw *string) (*string, error) {
 		return nil, ErrString("rate limit must look like 100/m, 1000/h or 50/10s")
 	}
 	return &value, nil
+}
+
+// NormalizeAllowedModels trims, drops blanks and case-insensitive duplicates.
+//
+// "*" is only meaningful at the end; one anywhere else reads like a glob the
+// matcher does not implement, so it is refused rather than silently matching
+// nothing.
+func NormalizeAllowedModels(raw []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, entry := range raw {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if utf8.RuneCountInString(trimmed) > APITokenAllowedModelMaxChars {
+			return nil, ErrString("allowed model names must be at most 200 characters")
+		}
+		if strings.ContainsFunc(trimmed, unicode.IsControl) {
+			return nil, ErrString("allowed model names must not contain control characters")
+		}
+		if strings.Contains(strings.TrimSuffix(trimmed, "*"), "*") || trimmed == "*" {
+			return nil, ErrString("\"*\" is only allowed at the end of a model name, after a prefix")
+		}
+
+		key := strings.ToLower(trimmed)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
+	}
+	if len(out) > APITokenAllowedModelsMax {
+		return nil, ErrString("a token may list at most 500 allowed models")
+	}
+	return out, nil
+}
+
+// ModelAllowed reports whether model passes an allowlist. An empty list allows
+// everything. Matching is case-insensitive, like channel routing.
+//
+//	["gpt-4o", "claude-*"]: "GPT-4o" yes, "claude-sonnet-5" yes, "o3" no
+func ModelAllowed(allowed []string, model string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	target := strings.ToLower(strings.TrimSpace(model))
+	for _, entry := range allowed {
+		pattern := strings.ToLower(entry)
+		if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
+			if strings.HasPrefix(target, prefix) {
+				return true
+			}
+			continue
+		}
+		if target == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // validateTokenMetadata judges the name and description that will be stored, and
@@ -212,6 +284,9 @@ func (t *APITokenIn) Validate() error {
 	if _, err := t.NormalizedRateLimit(); err != nil {
 		return err
 	}
+	if _, err := NormalizeAllowedModels(t.AllowedModels); err != nil {
+		return err
+	}
 	if t.Token == nil {
 		return nil
 	}
@@ -243,6 +318,9 @@ func (t *APITokenUpdateIn) Validate() error {
 		return err
 	}
 	if _, err := t.NormalizedRateLimit(); err != nil {
+		return err
+	}
+	if _, err := NormalizeAllowedModels(t.AllowedModels); err != nil {
 		return err
 	}
 	// A blank token means "leave it alone", so it never reaches the value rules.
@@ -285,6 +363,8 @@ type APITokenOut struct {
 	GroupName    string     `json:"group_name"`
 	Quota        QuotaState `json:"quota"`
 	RateLimit    *string    `json:"rate_limit"`
+	// AllowedModels is never null; empty means any model.
+	AllowedModels []string `json:"allowed_models"`
 }
 
 // APITokenCreatedOut is what the creation endpoint answers with.
@@ -307,6 +387,8 @@ type APITokenCreatedOut struct {
 	GroupName    string     `json:"group_name"`
 	Quota        QuotaState `json:"quota"`
 	RateLimit    *string    `json:"rate_limit"`
+	// AllowedModels is never null; empty means any model.
+	AllowedModels []string `json:"allowed_models"`
 }
 
 // TokenEnabledIn toggles a token.

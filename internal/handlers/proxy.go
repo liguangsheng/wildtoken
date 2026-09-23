@@ -118,6 +118,28 @@ func writeUpstreamRateLimitRejection(w http.ResponseWriter, path string) {
 	apperr.WriteJSON(w, http.StatusTooManyRequests, body)
 }
 
+// modelNotAllowedMessage explains a refusal by the token's model allowlist.
+func modelNotAllowedMessage(model *string) string {
+	if model == nil {
+		return "this API key is restricted to specific models; the request names none"
+	}
+	return "this API key is not allowed to use model " + strconv.Quote(*model)
+}
+
+// filterAllowedModelIDs keeps the ids a token's allowlist admits.
+func filterAllowedModelIDs(ids, allowed []string) []string {
+	if len(allowed) == 0 {
+		return ids
+	}
+	kept := []string{}
+	for _, id := range ids {
+		if models.ModelAllowed(allowed, id) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 // noRouteReason describes why routing found no upstream.
 //
 // The text goes to both the downstream error body and the request log, so a 503
@@ -358,6 +380,17 @@ func ProxyHandler(state *appstate.State) http.HandlerFunc {
 
 		model := parseModelFromBody(body)
 		guard.setModel(model)
+
+		// Checked before routing so a refused model never reaches a channel. A
+		// restricted token must name a model: without one nothing can be checked.
+		if len(auth.AllowedModels) > 0 &&
+			(model == nil || !models.ModelAllowed(auth.AllowedModels, *model)) {
+			message := modelNotAllowedMessage(model)
+			guard.logAndDisarm(http.StatusForbidden, message)
+			writeProtocolError(w, http.StatusForbidden, r.URL.Path, message, "permission_error")
+			return
+		}
+
 		selector := upstreamSelector(r)
 
 		runtimeSettings := state.Runtime.Get()
@@ -760,8 +793,21 @@ func ListModelsHandler(state *appstate.State) http.HandlerFunc {
 				apperr.WriteError(w, err)
 				return
 			}
+			writeRawJSON(w, OpenAIModelsListResponse(filterAllowedModelIDs(
+				AggregateModelIDs([]models.UpstreamRow{upstream}), auth.AllowedModels)))
+			return
+		}
+
+		// The cache is per group, and tokens in one group can carry different
+		// allowlists, so a restricted token bypasses it.
+		if len(auth.AllowedModels) > 0 {
+			upstreams, err := db.ListEnabledUpstreamsInGroup(r.Context(), state.DB, auth.GroupID)
+			if err != nil {
+				apperr.WriteError(w, err)
+				return
+			}
 			writeRawJSON(w, OpenAIModelsListResponse(
-				AggregateModelIDs([]models.UpstreamRow{upstream})))
+				filterAllowedModelIDs(AggregateModelIDs(upstreams), auth.AllowedModels)))
 			return
 		}
 

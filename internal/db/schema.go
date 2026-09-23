@@ -151,6 +151,8 @@ func Init(ctx context.Context, db *sql.DB) error {
 		{"used_tokens", "INTEGER NOT NULL DEFAULT 0"},
 		{"limit_tokens", "INTEGER"},
 		{"rate_limit", "TEXT"},
+		// JSON array of permitted model names; empty means any.
+		{"allowed_models", "TEXT NOT NULL DEFAULT '[]'"},
 	} {
 		if err := ensureColumn(ctx, db, "api_tokens", column.name, column.definition); err != nil {
 			return err

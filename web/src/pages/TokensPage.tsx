@@ -36,11 +36,21 @@ const SEALED_TITLE = "这个令牌创建于明文保存启用之前，完整值�
 function QuotaCell({ token }: { token: APIToken }) {
   const quota = token.quota;
   const used = Number(quota.used_tokens) || 0;
-  const rateNote = token.rate_limit ? (
-    <span className="muted quota-rate-note" title={`限速 ${token.rate_limit}`}>
-      {token.rate_limit}
-    </span>
-  ) : null;
+  const allowed = token.allowed_models ?? [];
+  const rateNote = (
+    <>
+      {token.rate_limit ? (
+        <span className="muted quota-rate-note" title={`限速 ${token.rate_limit}`}>
+          {token.rate_limit}
+        </span>
+      ) : null}
+      {allowed.length > 0 ? (
+        <span className="muted quota-rate-note" title={`允许的模型：\n${allowed.join("\n")}`}>
+          {allowed.length} 个模型
+        </span>
+      ) : null}
+    </>
+  );
 
   if (quota.limit_tokens === null || quota.limit_tokens === undefined) {
     return (

@@ -4,6 +4,7 @@ package middleware
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -51,6 +52,8 @@ type DownstreamAuth struct {
 	// under. LimitTokens is nil when the token is unlimited.
 	UsedTokens  int64
 	LimitTokens *int64
+	// AllowedModels restricts requestable models; empty means any.
+	AllowedModels []string
 }
 
 // DownstreamAuthFrom returns the downstream authentication attached to an
@@ -257,12 +260,13 @@ func RequireDownstream(database *sql.DB, limiter *ratelimit.Limiter,
 			}
 
 			ctx := context.WithValue(r.Context(), downstreamAuthKey, DownstreamAuth{
-				TokenID:     credential.TokenID,
-				TokenName:   credential.TokenName,
-				ClientType:  DetectClientType(r, anthropic),
-				GroupID:     credential.GroupID,
-				UsedTokens:  credential.UsedTokens,
-				LimitTokens: credential.LimitTokens,
+				TokenID:       credential.TokenID,
+				TokenName:     credential.TokenName,
+				ClientType:    DetectClientType(r, anthropic),
+				GroupID:       credential.GroupID,
+				UsedTokens:    credential.UsedTokens,
+				LimitTokens:   credential.LimitTokens,
+				AllowedModels: credential.AllowedModels,
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -439,6 +443,8 @@ type DownstreamCredential struct {
 	LimitTokens *int64
 	// RateLimit is the stored rate expression ("100/m"), nil when unlimited.
 	RateLimit *string
+	// AllowedModels is empty when the token may request any model.
+	AllowedModels []string
 }
 
 // LookupEnabledDownstreamToken resolves a token to its row.
@@ -467,14 +473,16 @@ func LookupEnabledDownstreamToken(ctx context.Context, database *sql.DB,
 	var credential DownstreamCredential
 	var storedGroupID, storedLimit sql.NullInt64
 	var storedRateLimit sql.NullString
+	var storedAllowedModels string
 	err := database.QueryRowContext(ctx,
-		`SELECT id, name, group_id, COALESCE(used_tokens, 0), limit_tokens, rate_limit
+		`SELECT id, name, group_id, COALESCE(used_tokens, 0), limit_tokens, rate_limit,
+		COALESCE(allowed_models, '[]')
 		FROM api_tokens
         WHERE token_hash = ? AND enabled = 1
           AND (expires_at IS NULL OR expires_at > datetime('now'))`,
 		db.TokenDigest(token)).
 		Scan(&credential.TokenID, &credential.TokenName, &storedGroupID,
-			&credential.UsedTokens, &storedLimit, &storedRateLimit)
+			&credential.UsedTokens, &storedLimit, &storedRateLimit, &storedAllowedModels)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DownstreamCredential{}, false, nil
 	}
@@ -491,6 +499,12 @@ func LookupEnabledDownstreamToken(ctx context.Context, database *sql.DB,
 	}
 	if storedRateLimit.Valid && storedRateLimit.String != "" {
 		credential.RateLimit = &storedRateLimit.String
+	}
+	// A malformed list, only possible through an out-of-band edit, reads as
+	// unrestricted, matching how a malformed rate limit is admitted.
+	var allowed []string
+	if err := json.Unmarshal([]byte(storedAllowedModels), &allowed); err == nil {
+		credential.AllowedModels = allowed
 	}
 	return credential, true, nil
 }
