@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export type ToastTone = "neutral" | "ok" | "error" | "warn";
 
@@ -40,9 +41,60 @@ export function useToast(): ShowToast {
   return show;
 }
 
+/**
+ * 当前最上层的模态对话框，没有则 null。
+ *
+ * showModal 打开的对话框会让它之外的整个文档变成 inert：提示哪怕画在最上面，
+ * 点击也会穿过去——点提示上的 ×，落到的是底下抽屉的关闭按钮。所以提示区要
+ * 挂进这个对话框里面。
+ */
+function useTopModalDialog(): HTMLDialogElement | null {
+  const [top, setTop] = useState<HTMLDialogElement | null>(null);
+
+  useEffect(() => {
+    const update = () => {
+      const modals = [...document.querySelectorAll("dialog[open]")].filter((dialog) =>
+        dialog.matches(":modal"),
+      ) as HTMLDialogElement[];
+      setTop(modals.at(-1) ?? null);
+    };
+    update();
+
+    // 对话框开合只改 open 属性；增删节点也可能带走一个开着的对话框。
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return top;
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(1);
+  const regionRef = useRef<HTMLDivElement>(null);
+  const newestId = toasts.at(-1)?.id ?? 0;
+  const host = useTopModalDialog();
+
+  /* 抽屉和对话框用 showModal 打开，进的是浏览器顶层，z-index 多大都盖不过。
+     提示区也做成 popover 进顶层；每来一条新消息、或换了宿主，就重新弹一次，
+     排到当前所有对话框之上——抽屉里保存失败的报错，正是这时候弹出来的。 */
+  useEffect(() => {
+    const region = regionRef.current;
+    if (!region || typeof region.showPopover !== "function") return;
+    try {
+      if (region.matches(":popover-open")) region.hidePopover();
+      if (newestId > 0) region.showPopover();
+    } catch {
+      // 不支持 popover 时退回普通的 fixed 定位，至少对话框外看得见。
+    }
+  }, [newestId, host]);
+
+  // 全部消息收起后退出顶层，别留一个空层压在对话框上。
+  useEffect(() => {
+    const region = regionRef.current;
+    if (toasts.length === 0 && region?.matches?.(":popover-open")) region.hidePopover();
+  }, [toasts.length]);
 
   const dismiss = useCallback((id: number) => {
     setToasts((list) => list.filter((toast) => toast.id !== id));
@@ -65,11 +117,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={show}>
       {children}
-      <div className="toast-region" aria-live="polite">
-        {toasts.map((toast) => (
-          <ToastItem key={toast.id} toast={toast} onDismiss={() => dismiss(toast.id)} />
-        ))}
-      </div>
+      {createPortal(
+        <div className="toast-region" ref={regionRef} popover="manual" aria-live="polite">
+          {toasts.map((toast) => (
+            <ToastItem key={toast.id} toast={toast} onDismiss={() => dismiss(toast.id)} />
+          ))}
+        </div>,
+        host ?? document.body,
+      )}
     </ToastContext.Provider>
   );
 }

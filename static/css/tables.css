@@ -931,9 +931,13 @@ td.no-match-state {
 
 /* ── Toasts ──────────────────────────────────────────────── */
 
+/* 提示区是 popover（进顶层才盖得过 showModal 的抽屉）。UA 给 [popover] 的
+   颜色、居中和尺寸都要改回来。 */
 .toast-region {
   background: transparent;
   border: 0;
+  color: inherit;
+  height: auto;
   display: grid;
   gap: 8px;
   inset: 16px 16px auto auto;
