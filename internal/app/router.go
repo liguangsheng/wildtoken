@@ -87,6 +87,7 @@ func mountAdminRoutes(router chi.Router, state *appstate.State) {
 			upstreams.Patch("/{id}/priority", handlers.AdminSetUpstreamPriority(state))
 			upstreams.Post("/{id}/test", handlers.AdminTestUpstream(state))
 			upstreams.Post("/{id}/test-model", handlers.AdminTestUpstreamModel(state))
+			upstreams.Post("/{id}/debug", handlers.AdminDebugUpstream(state))
 			upstreams.Post("/{id}/models", handlers.AdminFetchUpstreamModels(state))
 			upstreams.Post("/{id}/balance", handlers.AdminFetchUpstreamBalance(state))
 			upstreams.Post("/{id}/balance/sub2api", handlers.AdminFetchUpstreamSub2APIBalance(state))

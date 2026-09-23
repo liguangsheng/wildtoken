@@ -178,6 +178,19 @@ func claudeCLIModelTestHeaders(model string) map[string]string {
 	}
 }
 
+// protocolHeaders are the headers a protocol's reference client sends, so a
+// channel that keys off client headers behaves as it would in practice.
+func protocolHeaders(protocol, model string) map[string]string {
+	switch protocol {
+	case "responses":
+		return codexModelTestHeaders()
+	case "messages":
+		return claudeCLIModelTestHeaders(model)
+	default:
+		return map[string]string{"content-type": "application/json"}
+	}
+}
+
 // stripContext1MSuffix removes a trailing [1m] alias from a model id. The
 // beta-header decision in claudeCLIModelTestHeaders still reads the model as
 // typed, so the alias keeps its effect while the id goes upstream clean.
@@ -240,6 +253,11 @@ type consoleProbe struct {
 	upstreamName *string
 	// model is carried only by the model test.
 	model *string
+	// onResponse and onChunk, when set, see the response as it arrives: the
+	// debug page forwards a streamed answer chunk by chunk instead of waiting
+	// for the whole body. Neither changes what is logged.
+	onResponse func(status int, headers map[string]string)
+	onChunk    func(chunk []byte)
 }
 
 type probeOutcome struct {
@@ -324,7 +342,16 @@ func sendAndLogProbe(ctx context.Context, state *appstate.State, probe consolePr
 		}
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxProbeResponseBytes))
+	if probe.onResponse != nil {
+		probe.onResponse(status, headers)
+	}
+
+	var body []byte
+	if probe.onChunk != nil {
+		body, err = readProbeChunks(response.Body, probe.onChunk)
+	} else {
+		body, err = io.ReadAll(io.LimitReader(response.Body, maxProbeResponseBytes))
+	}
 	if err != nil {
 		entry := newEntry()
 		entry.StatusCode = &statusCode
@@ -358,6 +385,31 @@ func sendAndLogProbe(ctx context.Context, state *appstate.State, probe consolePr
 	state.LogWriter.Schedule(entry)
 
 	return probeOutcome{status: status, headers: headers, body: string(body)}, nil
+}
+
+// readProbeChunks hands every chunk to onChunk as it arrives and keeps the
+// first maxProbeResponseBytes for the log. Past that the caller still gets the
+// rest: cutting a debug stream short to protect a log snapshot would hide the
+// very answer being debugged.
+func readProbeChunks(body io.Reader, onChunk func([]byte)) ([]byte, error) {
+	var kept []byte
+	buffer := make([]byte, 32<<10)
+	for {
+		count, err := body.Read(buffer)
+		if count > 0 {
+			chunk := buffer[:count]
+			onChunk(chunk)
+			if room := maxProbeResponseBytes - len(kept); room > 0 {
+				kept = append(kept, chunk[:min(room, count)]...)
+			}
+		}
+		if err == io.EOF {
+			return kept, nil
+		}
+		if err != nil {
+			return kept, err
+		}
+	}
 }
 
 func durationMs(startedAt time.Time) *int32 {
@@ -907,15 +959,7 @@ func AdminTestUpstreamModel(state *appstate.State) http.HandlerFunc {
 		}
 		targetURL := buildProbeURL(row.BaseURL, targetPath, targetQuery)
 
-		// Each protocol is sent the way its reference client sends it, so a
-		// channel that keys off client headers behaves as it would in practice.
-		defaultHeaders := map[string]string{"content-type": "application/json"}
-		switch input.Protocol {
-		case "responses":
-			defaultHeaders = codexModelTestHeaders()
-		case "messages":
-			defaultHeaders = claudeCLIModelTestHeaders(strings.TrimSpace(input.Model))
-		}
+		defaultHeaders := protocolHeaders(input.Protocol, strings.TrimSpace(input.Model))
 
 		overrides, err := parseExtraHeaders(row.ExtraHeaders)
 		if err != nil {

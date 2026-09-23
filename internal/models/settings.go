@@ -1,6 +1,8 @@
 package models
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -33,6 +35,42 @@ func (r *ModelTestRequest) Validate() error {
 	}
 	if len(r.Prompt) > 20000 {
 		return ErrString("prompt must be at most 20000 bytes")
+	}
+	return nil
+}
+
+// DebugRequest is one request from the debug page: a hand-edited body sent
+// through a channel as-is.
+//
+// Model feeds the protocol headers and the log row. It is separate from the
+// body's model field because the two can differ on purpose: "opus[1m]" asks
+// for the 1M beta header while the body carries the plain id.
+type DebugRequest struct {
+	Protocol string          `json:"protocol"`
+	Model    string          `json:"model"`
+	Body     json.RawMessage `json:"body"`
+}
+
+// debugBodyMaxBytes bounds the edited body. Four times the prompt limit
+// leaves room for a system prompt and tool definitions.
+const debugBodyMaxBytes = 1 << 20
+
+func (r *DebugRequest) Validate() error {
+	switch r.Protocol {
+	case "responses", "chat_completions", "messages", "images":
+	default:
+		return ErrString("protocol must be responses, chat_completions, messages, or images")
+	}
+	if len(r.Model) > 500 {
+		return ErrString("model must be at most 500 bytes")
+	}
+	if len(r.Body) > debugBodyMaxBytes {
+		return ErrString("body must be at most 1 MiB")
+	}
+	// Every protocol takes a JSON object. An array or a bare string would go
+	// upstream and come back as a 400 that looks like the channel's fault.
+	if trimmed := bytes.TrimSpace(r.Body); len(trimmed) == 0 || trimmed[0] != '{' {
+		return ErrString("body must be a JSON object")
 	}
 	return nil
 }
