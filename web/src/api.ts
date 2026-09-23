@@ -54,7 +54,11 @@ function reportUnauthorized(message: string): void {
   window.dispatchEvent(new CustomEvent<string>("console:unauthorized", { detail: message }));
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * 发请求、带令牌、把非 2xx 变成异常。返回原始 Response，读法由调用方定——
+ * JSON 走 api()，事件流由调用方自己逐块读。
+ */
+export async function send(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
@@ -79,7 +83,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     throw new Error(message);
   }
+  return response;
+}
 
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await send(path, init);
   if (response.status === 204) return null as T;
   return (await response.json()) as T;
 }

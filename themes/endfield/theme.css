@@ -427,7 +427,9 @@ html[data-theme="endfield"] .view[data-view="upstreams"] > .panel::before { cont
 html[data-theme="endfield"] .view[data-view="logs"] > .panel::before { content: "03"; }
 html[data-theme="endfield"] .view[data-view="tokens"] > .panel::before { content: "04"; }
 html[data-theme="endfield"] .view[data-view="groups"] > .panel::before { content: "05"; }
-html[data-theme="endfield"] .view[data-view="settings"] > .panel::before { content: "06"; }
+html[data-theme="endfield"] .view[data-view="debug"] > .panel::before { content: "06"; }
+html[data-theme="endfield"] .view[data-view="images"] > .panel::before { content: "07"; }
+html[data-theme="endfield"] .view[data-view="settings"] > .panel::before { content: "08"; }
 
 html[data-theme="endfield"] .view > .panel > .panel-head {
   align-items: end;
@@ -454,7 +456,9 @@ html[data-theme="endfield"] .view[data-view="upstreams"] > .panel > .panel-head:
 html[data-theme="endfield"] .view[data-view="logs"] > .panel > .panel-head::before { content: "03 / REQUEST ARCHIVE"; }
 html[data-theme="endfield"] .view[data-view="tokens"] > .panel > .panel-head::before { content: "04 / ACCESS CONTROL"; }
 html[data-theme="endfield"] .view[data-view="groups"] > .panel > .panel-head::before { content: "05 / ROUTING SCOPES"; }
-html[data-theme="endfield"] .view[data-view="settings"] > .panel > .panel-head::before { content: "06 / CONSOLE CONFIG"; }
+html[data-theme="endfield"] .view[data-view="debug"] > .panel > .panel-head::before { content: "06 / CHANNEL PROBE"; }
+html[data-theme="endfield"] .view[data-view="images"] > .panel > .panel-head::before { content: "07 / IMAGE PROBE"; }
+html[data-theme="endfield"] .view[data-view="settings"] > .panel > .panel-head::before { content: "08 / CONSOLE CONFIG"; }
 
 /* The label above is this theme's own, numbered to line up with the rail and
    the sector watermark. base.css gives every view header an .eyebrow saying
@@ -1055,7 +1059,7 @@ html[data-theme="endfield"] .live-dot {
     box-shadow: 0 5px 0 rgb(25 25 25 / 22%);
     display: grid;
     gap: 1px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     left: 8px;
     padding: 3px;
     position: fixed;

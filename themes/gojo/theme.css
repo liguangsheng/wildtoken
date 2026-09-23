@@ -722,6 +722,14 @@ html[data-theme="gojo"] .view[data-view="groups"] {
   --gojo-view-mark: "領";
 }
 
+html[data-theme="gojo"] .view[data-view="debug"] {
+  --gojo-view-mark: "試";
+}
+
+html[data-theme="gojo"] .view[data-view="images"] {
+  --gojo-view-mark: "絵";
+}
+
 html[data-theme="gojo"] .view[data-view="settings"] {
   --gojo-view-mark: "縛";
 }
@@ -1525,7 +1533,7 @@ html[data-theme="gojo"] ::-webkit-scrollbar-corner {
     box-shadow: 0 10px 26px rgb(0 0 0 / 52%);
     display: grid;
     gap: 2px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     left: 8px;
     padding: 4px;
     position: fixed;

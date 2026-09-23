@@ -1,0 +1,218 @@
+/* ── 调试页 ─────────────────────────────────────────────────
+   左右各一半：左边是表单（参数卡在上、请求体在下），右边是结果，多个渠道
+   从上往下排。窄屏上下叠。卡片、字段和结果块都借现成的 settings-card /
+   field / test-model-*，这里只管布局和几处特有控件。 */
+
+.debug-layout {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.debug-compose {
+  display: grid;
+  gap: 16px;
+}
+
+.debug-params {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 参数卡里从上往下：先选渠道，再填参数。 */
+.debug-params-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.debug-params-side {
+  display: grid;
+  gap: 14px;
+}
+
+/* 下限给够一屏 JSON 的高度，不用滚动就能看全默认请求体。 */
+.debug-body-card .debug-body {
+  min-height: 340px;
+}
+
+.debug-channel-list {
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.debug-channel {
+  align-items: center;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  display: grid;
+  font-size: var(--text-sm);
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 5px 8px;
+}
+
+.debug-channel:hover {
+  background: var(--panel-subtle);
+}
+
+.debug-channel > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-channel > .muted {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.debug-channel-list > .muted {
+  margin: 0;
+  padding: 8px;
+}
+
+.debug-options {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.debug-stream-toggle {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: var(--text-sm);
+  gap: 8px;
+  min-height: 34px;
+}
+
+.debug-stream-toggle input {
+  width: auto;
+}
+
+.debug-body {
+  font: 12px/1.55 var(--font-mono, monospace);
+  min-height: 260px;
+  resize: vertical;
+  tab-size: 2;
+  /* 长 prompt 折行，不然整个请求体要横着滚。 */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.debug-body[aria-invalid="true"] {
+  border-color: var(--danger-border);
+}
+
+.debug-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* 结果占右半边，多个渠道从上往下排。 */
+.debug-results {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.debug-empty p {
+  margin: 0;
+}
+
+.debug-run[data-tone="ok"] {
+  border-color: var(--accent-border);
+}
+
+.debug-run[data-tone="error"] {
+  border-color: var(--danger-border);
+}
+
+.debug-run-meta {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.debug-run-error {
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--line);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  margin: 0;
+  padding: 8px 12px;
+}
+
+/* 回复区限高：多渠道对比时一个长回答不该把后面的卡片推出屏幕。 */
+.debug-run-reply {
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px 12px;
+}
+
+.debug-run-reply > .muted {
+  margin: 0;
+}
+
+@media (max-width: 1100px) {
+  .debug-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── 生图页 ── 结果区换成图墙，其余沿用调试页。 */
+
+.image-gallery {
+  display: grid;
+  gap: 12px;
+  /* auto-fit：只有一张图时撑满整张卡，多张时再分列。 */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.image-figure {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.image-figure img {
+  /* 透明底的图要看得出边界，垫一层棋盘格。 */
+  background: repeating-conic-gradient(var(--panel-muted) 0% 25%, var(--panel-subtle) 0% 50%) 0 0 / 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: block;
+  height: auto;
+  max-height: 520px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.image-figure figcaption {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.image-usage {
+  color: var(--text-secondary);
+  font: 12px/1.5 var(--font-mono, monospace);
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+}

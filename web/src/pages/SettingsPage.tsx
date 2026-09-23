@@ -288,6 +288,8 @@ export function SettingsPage({ onUnauthorized }: { onUnauthorized: (message: str
                   <option value="logs">日志</option>
                   <option value="tokens">令牌</option>
                   <option value="groups">分组</option>
+                  <option value="debug">调试</option>
+                  <option value="images">生图</option>
                   <option value="settings">设置</option>
                 </select>
                 <span className="field-hint">地址栏带着页面锚点时，仍优先进那一页。</span>

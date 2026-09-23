@@ -22,6 +22,8 @@ html[data-theme="light"] {
   --rail-icon-logs: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.5h15M4.5 12h15M4.5 17.5h10'/%3E%3C/svg%3E");
   --rail-icon-tokens: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='12' r='3.4'/%3E%3Cpath d='M10.4 12h10.1M17.6 12v3.4M14.2 12v2.8'/%3E%3C/svg%3E");
   --rail-icon-groups: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.4'/%3E%3Ccircle cx='9.2' cy='10.2' r='1.5'/%3E%3Ccircle cx='14.8' cy='10.2' r='1.5'/%3E%3Ccircle cx='12' cy='15.2' r='1.5'/%3E%3C/svg%3E");
+  --rail-icon-debug: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='1.6'/%3E%3Cpath d='M7.5 9.5 10.5 12l-3 2.5M12.5 15h4'/%3E%3C/svg%3E");
+  --rail-icon-images: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='1.6'/%3E%3Ccircle cx='9' cy='9.5' r='1.6'/%3E%3Cpath d='m4 17.5 5-4.5 4 3.5 2.5-2 4.5 3.5'/%3E%3C/svg%3E");
   --rail-icon-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7.5h9M17.5 7.5h2.5M4 16.5h3.5M12 16.5h8'/%3E%3Ccircle cx='15.2' cy='7.5' r='2.2'/%3E%3Ccircle cx='9.7' cy='16.5' r='2.2'/%3E%3C/svg%3E");
 
   /* Rail footer. Density is two arrows closing on a centre rule; a plain
@@ -94,6 +96,18 @@ html[data-theme="dark"] .nav-link[data-view="groups"]::before,
 html[data-theme="light"] .nav-link[data-view="groups"]::before {
   mask-image: var(--rail-icon-groups);
   -webkit-mask-image: var(--rail-icon-groups);
+}
+
+html[data-theme="dark"] .nav-link[data-view="debug"]::before,
+html[data-theme="light"] .nav-link[data-view="debug"]::before {
+  mask-image: var(--rail-icon-debug);
+  -webkit-mask-image: var(--rail-icon-debug);
+}
+
+html[data-theme="dark"] .nav-link[data-view="images"]::before,
+html[data-theme="light"] .nav-link[data-view="images"]::before {
+  mask-image: var(--rail-icon-images);
+  -webkit-mask-image: var(--rail-icon-images);
 }
 
 html[data-theme="dark"] .nav-link[data-view="settings"]::before,

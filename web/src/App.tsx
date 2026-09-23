@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { UnauthorizedError, setAdminToken } from "./api";
 import { AdminTokenDialog } from "./components/AdminTokenDialog";
@@ -16,20 +16,26 @@ import {
   currentTheme,
 } from "./theme";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DebugPage } from "./pages/DebugPage";
 import { GroupsPage } from "./pages/GroupsPage";
+import { ImagePage } from "./pages/ImagePage";
 import { LogsPage } from "./pages/LogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TokensPage } from "./pages/TokensPage";
 import { UpstreamsPage } from "./pages/UpstreamsPage";
 import { getAdminToken } from "./api";
 
-export type ViewId = "dashboard" | "upstreams" | "logs" | "tokens" | "groups" | "settings";
+export type ViewId = "dashboard" | "upstreams" | "logs" | "tokens" | "groups" | "debug" | "images" | "settings";
 
-const VIEWS: ViewId[] = ["dashboard", "upstreams", "logs", "tokens", "groups", "settings"];
+const VIEWS: ViewId[] = ["dashboard", "upstreams", "logs", "tokens", "groups", "debug", "images", "settings"];
 
 /** 默认落地页的偏好键，和旧控制台共用。 */
 const DEFAULT_HOME_KEY = "wildtoken_default_home";
 const FALLBACK_VIEW: ViewId = "dashboard";
+
+/* 打开过就一直挂着、切走只隐藏的视图。这两页的请求一跑就是几十秒，切去看
+   一眼日志回来，表单、结果和还在收流的请求都得还在。 */
+const KEEP_ALIVE: readonly ViewId[] = ["debug", "images"];
 
 function isView(value: string | null): value is ViewId {
   return value !== null && (VIEWS as string[]).includes(value);
@@ -59,12 +65,28 @@ export function App() {
   const [view, setViewState] = useState<ViewId>(viewFromHash);
   const [needsToken, setNeedsToken] = useState(() => getAdminToken() === "");
   const [tokenError, setTokenError] = useState("");
-  /* <main> 的 key。自增一次就把当前页重挂载一遍，它自己会重新取数。
+  /* 页面的 key。自增一次就把页面重挂载一遍，它自己会重新取数，页面不必知道
+     为什么。
 
-     两个场合用到：登录成功（401 那一刻页面已经取数失败并停在空态，光关掉
-     登录框界面会一直空着），和命令面板的「刷新当前视图」。都不必让页面
-     知道这两件事。 */
+     contentEpoch 管全部：登录成功时用（401 那一刻页面已经取数失败并停在空态，
+     光关掉登录框界面会一直空着）。viewEpochs 只管一页：命令面板的「刷新当前
+     视图」用——在日志页刷新，不该连带重置后台还挂着的调试页。 */
   const [contentEpoch, setContentEpoch] = useState(0);
+  const [viewEpochs, setViewEpochs] = useState<Partial<Record<ViewId, number>>>({});
+  const [keptAlive, setKeptAlive] = useState<ReadonlySet<ViewId>>(() => new Set());
+
+  // 命令是 useMemo 里一次建好的，要靠 ref 读到当前视图。
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  useEffect(() => {
+    if (!KEEP_ALIVE.includes(view)) return;
+    setKeptAlive((current) => (current.has(view) ? current : new Set([...current, view])));
+  }, [view]);
+
+  const pageKey = (id: ViewId) => `${id}-${contentEpoch}-${viewEpochs[id] ?? 0}`;
+  // 当前视图也算：effect 还没把它记进集合的那一帧，页面不能空着。
+  const alive = (id: ViewId) => keptAlive.has(id) || view === id;
 
   /* 401 从任何请求里冒出来时统一处理：清掉令牌、弹登录框。旧控制台是在
      api() 里直接开弹窗，这里改成往上抛，由一处集中接住——组件不需要知道
@@ -113,6 +135,8 @@ export function App() {
       { id: "logs", label: "日志", hint: "查看代理请求日志" },
       { id: "tokens", label: "令牌", hint: "管理下游 API 令牌" },
       { id: "groups", label: "分组", hint: "隔离令牌可访问的渠道范围" },
+      { id: "debug", label: "调试", hint: "向渠道发送自定义请求并对比响应" },
+      { id: "images", label: "生图", hint: "向渠道发送生图请求并对比出图" },
       { id: "settings", label: "设置", hint: "控制台偏好与网关策略" },
     ];
     const themeIds = [...BUILTIN_THEMES, ...Object.keys(THEME_PACKS)];
@@ -128,7 +152,10 @@ export function App() {
         id: "refresh",
         title: "刷新当前视图",
         subtitle: "重新加载当前页数据",
-        run: () => setContentEpoch((epoch) => epoch + 1),
+        run: () => {
+          const current = viewRef.current;
+          setViewEpochs((epochs) => ({ ...epochs, [current]: (epochs[current] ?? 0) + 1 }));
+        },
       },
       {
         id: "theme",
@@ -162,22 +189,31 @@ export function App() {
       <ConfirmProvider>
         <div className="app-shell">
           <Topbar view={view} onNavigate={setView} />
-          <main className="content" key={contentEpoch}>
-            {view === "upstreams" ? (
-              <UpstreamsPage onUnauthorized={handleUnauthorized} />
-            ) : view === "logs" ? (
-              <LogsPage onUnauthorized={handleUnauthorized} />
-            ) : view === "tokens" ? (
-              <TokensPage onUnauthorized={handleUnauthorized} />
-            ) : view === "groups" ? (
-              <GroupsPage onUnauthorized={handleUnauthorized} />
-            ) : view === "settings" ? (
-              <SettingsPage onUnauthorized={handleUnauthorized} />
-            ) : view === "dashboard" ? (
-              <DashboardPage onUnauthorized={handleUnauthorized} />
-            ) : (
-              <NotImplemented view={view} />
-            )}
+          <main className="content">
+            {alive("debug") ? (
+              <DebugPage key={pageKey("debug")} active={view === "debug"} onUnauthorized={handleUnauthorized} />
+            ) : null}
+            {alive("images") ? (
+              <ImagePage key={pageKey("images")} active={view === "images"} onUnauthorized={handleUnauthorized} />
+            ) : null}
+            {/* key 带前缀：和上面常驻页同处一层，裸用 pageKey(view) 会跟它们撞 key。 */}
+            <Fragment key={`routed-${pageKey(view)}`}>
+              {KEEP_ALIVE.includes(view) ? null : view === "upstreams" ? (
+                <UpstreamsPage onUnauthorized={handleUnauthorized} />
+              ) : view === "logs" ? (
+                <LogsPage onUnauthorized={handleUnauthorized} />
+              ) : view === "tokens" ? (
+                <TokensPage onUnauthorized={handleUnauthorized} />
+              ) : view === "groups" ? (
+                <GroupsPage onUnauthorized={handleUnauthorized} />
+              ) : view === "settings" ? (
+                <SettingsPage onUnauthorized={handleUnauthorized} />
+              ) : view === "dashboard" ? (
+                <DashboardPage onUnauthorized={handleUnauthorized} />
+              ) : (
+                <NotImplemented view={view} />
+              )}
+            </Fragment>
           </main>
           <AdminTokenDialog
             open={needsToken}

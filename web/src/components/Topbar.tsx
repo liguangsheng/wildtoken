@@ -20,6 +20,8 @@ const NAV: Array<{ id: ViewId; label: string }> = [
   { id: "logs", label: "日志" },
   { id: "tokens", label: "令牌" },
   { id: "groups", label: "分组" },
+  { id: "debug", label: "调试" },
+  { id: "images", label: "生图" },
   { id: "settings", label: "设置" },
 ];
 

@@ -31,7 +31,7 @@ function sorted(models: string[]): string[] {
 }
 
 /** 按 HTTP 报文的样子排版，照抄旧版 formatHttpRequest。 */
-function formatRequest(request: ModelTestResult["request"]): string {
+export function formatRequest(request: ModelTestResult["request"]): string {
   if (!request) return "";
   let host = "";
   try {
