@@ -681,6 +681,14 @@ html[data-theme="ark"] .settings-local-tag {
   color: var(--ark-signal);
 }
 
+/* 排行名走 --font-mono，栈里没有中文字体，中文渠道名落到浏览器默认字体。
+   拉丁字符仍用 Fira Code，中文接 --font-sans 里同一组黑体。中文必须排在
+   通用族 monospace 前面，否则会被它先接走。 */
+html[data-theme="ark"] .dashboard-rank-name {
+  font-family: "Fira Code", "IBM Plex Mono", "SFMono-Regular", Consolas,
+    "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", monospace;
+}
+
 html[data-theme="ark"] .settings-local-tag,
 html[data-theme="ark"] .settings-readonly-tag,
 html[data-theme="ark"] .settings-security-mark,
