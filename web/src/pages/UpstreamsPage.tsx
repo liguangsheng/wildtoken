@@ -320,38 +320,49 @@ export function UpstreamsPage({ onUnauthorized }: { onUnauthorized: (message: st
     }
   }
 
-  async function runQuickImport(name: string, baseUrl: string, apiKey: string | null) {
-    setBusyDialog(true);
-    try {
-      /* 快速导入只填必填项，其余走后端默认值。模型列表留空，
-         表示接收全部模型——与旧版一致。 */
-      const created = await createUpstream({
+  /**
+   * 快速导入：不建渠道，只把识别到的值填进新增表单，由用户过一眼再保存。
+   *
+   * 走克隆那条已验证的路径——id 0 的草稿在表单里按新建对待。这样识别错了
+   * 还能就地改，也能顺手配分组和高级项，而不是先落库再回头编辑。
+   * 优先级给 999 而不是目录默认的 100：快速导入建的多是临时/测试渠道，
+   * 要压过手工配的；它只是预填，用户可以改。
+   */
+  function runQuickImport(
+    name: string,
+    baseUrl: string,
+    apiKey: string | null,
+    modelNames: string[],
+  ) {
+    setQuickOpen(false);
+    setEditing({
+      upstream: {
+        id: 0,
         name,
         base_url: baseUrl,
         api_key: apiKey,
-        model_names: [],
+        /* 表单只用它决定要不要显示「清空 API Key」。草稿还没有已存的密钥，
+           给 true 会让那个勾选框冒出来，勾了还会把刚填的 Key 清掉。 */
+        api_key_set: false,
+        model_names: modelNames,
         model_prefixes: [],
         model_mappings: {},
         effort_mappings: {},
-        priority: 100,
+        priority: 999,
         weight: 100,
         auto_weight_enabled: true,
-        timeout_seconds: 300,
         enabled: true,
+        archived: false,
         extra_headers: {},
+        timeout_seconds: 300,
         rate_limit: null,
-        clear_api_key: false,
+        created_at: "",
+        updated_at: "",
+        runtime_health_score: 1,
+        effective_weight: 100,
         group_ids: [],
-      });
-      setQuickOpen(false);
-      await reload();
-      toast(`渠道 ${created.name} 已创建。`, { tone: "ok" });
-    } catch (err) {
-      if (err instanceof UnauthorizedError) onUnauthorized(err.message);
-      else toast(`创建失败：${err instanceof Error ? err.message : String(err)}`, { tone: "error" });
-    } finally {
-      setBusyDialog(false);
-    }
+      },
+    });
   }
 
   async function mutate(id: number, run: () => Promise<Upstream>) {
@@ -929,9 +940,11 @@ export function UpstreamsPage({ onUnauthorized }: { onUnauthorized: (message: st
 
       <QuickImportDialog
         open={quickOpen}
-        busy={busyDialog}
-        onSubmit={(name, baseUrl, apiKey) => void runQuickImport(name, baseUrl, apiKey)}
+        onSubmit={(name, baseUrl, apiKey, modelNames) =>
+          runQuickImport(name, baseUrl, apiKey, modelNames)
+        }
         onClose={() => setQuickOpen(false)}
+        onUnauthorized={onUnauthorized}
       />
 
       <ModelTestDialog open={testing !== null} upstream={testing} onClose={() => setTesting(null)} />

@@ -408,6 +408,15 @@
     width: 100%;
   }
 
+  /* 窄屏下地址和按钮挤一行会互相压缩，改成上下。 */
+  .quick-import-url-row {
+    flex-direction: column;
+  }
+
+  .quick-import-url-row > button {
+    width: 100%;
+  }
+
   .field,
   .grid-form label,
   .quick-import-panel .field,

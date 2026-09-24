@@ -1184,6 +1184,160 @@ async function main() {
       );
     });
 
+    /* 快速导入：拉模型、显示、全选，建出来的渠道要带上选中的模型和 999 优先级。
+       这三件事各自都能坏掉而不报错：拉不到只是列表空、默认漏勾就是少几个模型、
+       优先级退回 100 则完全看不出来。 */
+    await check("快速导入拉模型后填进表单而不落库", async () => {
+      const dialog = "dialog.quick-import-dialog[open]";
+      await page.evaluate(() => {
+        const button = [...document.querySelectorAll("button")].find(
+          (node) => node.textContent.trim() === "快速导入",
+        );
+        if (!button) throw new Error("找不到快速导入按钮");
+        button.click();
+      });
+      await page.waitForSelector(dialog, { label: "快速导入窗" });
+
+      // 真实粘贴的样子：面板地址、密钥、备用地址混在一起，都要被认出来。
+      const key = "sk-quick-import-0123456789abcdef";
+      await page.fill(
+        `${dialog} textarea`,
+        `面板：http://127.0.0.1:${fakeUpstreamPort}/v1\n密钥 ${key}\n备用 https://backup.example.com`,
+      );
+
+      const pulled = await page.evaluate(async (scope) => {
+        const button = [...document.querySelectorAll(`${scope} button`)].find(
+          (node) => node.textContent.trim() === "拉取模型",
+        );
+        if (!button) throw new Error("找不到拉取模型按钮");
+        button.click();
+        return true;
+      }, dialog);
+      assert(pulled, "拉取按钮点不到");
+
+      const names = await page.waitFor(
+        (scope) => {
+          const list = [...document.querySelectorAll(`${scope} .quick-import-models .model-option-name`)].map(
+            (node) => node.textContent,
+          );
+          return list.length > 0 ? list : false;
+        },
+        { label: "拉取到的模型列表", timeout: 10_000 },
+        dialog,
+      );
+      assertEqual(names.join(","), FAKE_MODELS.join(","), "显示出来的模型");
+
+      // 拉回来就默认全选，否则等于没拉。
+      const allChecked = await page.evaluate(
+        (scope) =>
+          [...document.querySelectorAll(`${scope} .quick-import-models input`)].every(
+            (input) => input.checked,
+          ),
+        dialog,
+      );
+      assertEqual(allChecked, true, "拉到的模型应默认全选");
+
+      // 摘掉一个，看它会不会跟着渠道存进去。
+      await page.evaluate((scope) => {
+        const input = [...document.querySelectorAll(`${scope} .quick-import-models input`)][1];
+        input.click();
+      }, dialog);
+
+      /* 名称框：原始文本框下面、Base URL 上面那个。按顺序数比按 placeholder
+         数稳——自适应识别会把名称填成 api-example。 */
+      const name = `quick-import-${Date.now()}`;
+      await page.evaluate(
+        (scope, value) => {
+          const input = document.querySelectorAll(`${scope} .field input`)[0];
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+          setter.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        dialog,
+        name,
+      );
+
+      await page.evaluate((scope) => {
+        const button = [...document.querySelectorAll(`${scope} .modal-footer button`)].find(
+          (node) => node.textContent.trim() === "填入表单",
+        );
+        if (!button) throw new Error("找不到填入表单按钮");
+        button.click();
+      }, dialog);
+
+      /* 关键：这一步不该落库，只该把值交给新增表单。等编辑抽屉出现，
+         同时确认快速导入窗已经让位。 */
+      await page.waitForSelector("dialog.upstream-dialog[open]", {
+        label: "新增渠道表单",
+        timeout: 10_000,
+      });
+      assertEqual(
+        await page.count("dialog.quick-import-dialog[open]"),
+        0,
+        "填入表单后快速导入窗该关掉",
+      );
+
+      const form = await page.evaluate(() => {
+        const dialog = document.querySelector("dialog.upstream-dialog[open]");
+        const value = (label) => {
+          const field = [...dialog.querySelectorAll(".field")].find(
+            (node) => node.querySelector(".field-label")?.textContent?.trim() === label,
+          );
+          return field?.querySelector("input")?.value ?? null;
+        };
+        return {
+          title: dialog.querySelector(".modal-head h2")?.textContent?.trim() ?? "",
+          name: value("名称"),
+          baseUrl: value("Base URL"),
+          apiKey: value("API Key"),
+          priority: value("优先级"),
+          chips: [...dialog.querySelectorAll(".model-selection-chip-name")].map(
+            (node) => node.textContent,
+          ),
+          // 草稿没有已存密钥，这个勾选框不该出现——勾了会把刚填的 Key 清掉。
+          hasClearKey: dialog.textContent.includes("清空 API Key"),
+        };
+      });
+
+      // id 0 的草稿要按新建对待，标题写「编辑渠道 #0」就说明走错了分支。
+      assertEqual(form.title, "新增渠道", "草稿应按新建对待");
+      assertEqual(form.name, name, "名称带进表单");
+      assertEqual(form.baseUrl, `http://127.0.0.1:${fakeUpstreamPort}`, "Base URL 带进表单");
+      assertEqual(form.apiKey, key, "API Key 带进表单");
+      assertEqual(form.priority, "999", "优先级预填 999");
+      assertEqual(form.hasClearKey, false, "草稿不该出现清空 API Key");
+      assert(
+        form.chips.includes(FAKE_MODELS[0]),
+        `留下的 ${FAKE_MODELS[0]} 应该在已选模型里：${form.chips}`,
+      );
+      assert(
+        !form.chips.includes(FAKE_MODELS[1]),
+        `被摘掉的 ${FAKE_MODELS[1]} 不该在已选模型里：${form.chips}`,
+      );
+
+      /* 没保存就关掉：这条只验预填，不该往库里留东西。顺便确认真的没建——
+         「不落库」是这次改动的全部意义，光看表单填对了证明不了。 */
+      await page.click("dialog.upstream-dialog[open] .icon-close");
+      await page.waitFor(() => document.querySelector("dialog.upstream-dialog[open]") === null, {
+        label: "表单关闭",
+      });
+      await page.evaluate(() => {
+        const button = [...document.querySelectorAll(".view-toolbar button")].find(
+          (node) => node.textContent.trim() === "刷新",
+        );
+        if (!button) throw new Error("找不到刷新按钮");
+        button.click();
+      });
+      const leaked = await page.evaluate(
+        (fragment) =>
+          [...document.querySelectorAll("table.upstream-table tbody tr")].some((node) =>
+            node.querySelector("[data-col=name]")?.textContent?.includes(fragment),
+          ),
+        name,
+      );
+      assertEqual(leaked, false, "只填表单不该建出渠道");
+    });
+
     /* 不带密钥的备份看着完整，导回去每个渠道都要重填。直接比导出文本里
        有没有密钥字段，不看开关勾没勾。 */
     await check("导出默认带密钥，关掉后不带", async () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
+import { UnauthorizedError, fetchModelsPreview } from "../api";
 import { useDialog } from "../useDialog";
 import { copyText } from "../clipboard";
 
@@ -314,21 +315,32 @@ export function parseQuickImport(text: string): { baseUrl: string | null; apiKey
   return { baseUrl, apiKey };
 }
 
+/** 从返回里取出模型名。形状不对就当失败——沉默的空列表看不出是上游没给还是我们读错了。 */
+function readModels(payload: { models?: unknown }): string[] {
+  if (!Array.isArray(payload?.models)) throw new Error("返回里没有模型列表。");
+  return payload.models as string[];
+}
+
 export function QuickImportDialog({
   open,
-  busy,
   onSubmit,
   onClose,
+  onUnauthorized,
 }: {
   open: boolean;
-  busy: boolean;
-  onSubmit: (name: string, baseUrl: string, apiKey: string | null) => void;
+  /** 只把识别到的值交回调用方填进表单，不发创建请求，所以没有 busy 态。 */
+  onSubmit: (name: string, baseUrl: string, apiKey: string | null, modelNames: string[]) => void;
   onClose: () => void;
+  onUnauthorized: (message: string) => void;
 }) {
   const [raw, setRaw] = useState("");
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  /* 拉到的模型，默认全选。null 是「还没拉」，和拉回 0 个要分开。 */
+  const [pull, setPull] = useState<{ models: string[]; picked: Set<string> } | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pullError, setPullError] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -336,6 +348,9 @@ export function QuickImportDialog({
     setName("");
     setBaseUrl("");
     setApiKey("");
+    setPull(null);
+    setPulling(false);
+    setPullError("");
   }, [open]);
 
   /** 从 URL 猜个名字，省得每次手打。 */
@@ -347,11 +362,50 @@ export function QuickImportDialog({
     }
   }
 
+  /**
+   * 拉模型列表。渠道还没存，直接拿当前填的地址和 Key 问预览接口。
+   *
+   * 这里不建临时渠道再拉：建完失败会留下一个没建成功却已经落库的渠道。
+   */
+  async function pullModels() {
+    const url = baseUrl.trim();
+    if (!url) {
+      setPullError("请先填写 Base URL 再拉取模型。");
+      return;
+    }
+
+    setPulling(true);
+    setPullError("");
+    try {
+      const models = readModels(
+        await fetchModelsPreview(url, apiKey.trim() || null, { timeoutSeconds: 300 }),
+      );
+      // 拉到的默认全选：拉回来就是为了用，逐个勾是反过来的默认。
+      setPull({ models, picked: new Set(models) });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) onUnauthorized(err.message);
+      else setPullError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPulling(false);
+    }
+  }
+
+  /** 勾/取消一个拉回来的模型。 */
+  function toggleModel(model: string, checked: boolean) {
+    setPull((current) => {
+      if (!current) return current;
+      const picked = new Set(current.picked);
+      if (checked) picked.add(model);
+      else picked.delete(model);
+      return { ...current, picked };
+    });
+  }
+
   return (
     <TransferDialog
       open={open}
       title="快速导入"
-      description="粘贴一段包含 Base URL 和 API Key 的文本，自动识别。"
+      description="粘贴一段包含 Base URL 和 API Key 的文本，自动识别后填进新增表单。"
       onClose={onClose}
       actions={
         <>
@@ -361,10 +415,17 @@ export function QuickImportDialog({
           <button
             className="primary"
             type="button"
-            disabled={busy || !name.trim() || !baseUrl.trim()}
-            onClick={() => onSubmit(name.trim(), baseUrl.trim(), apiKey.trim() || null)}
+            disabled={!name.trim() || !baseUrl.trim()}
+            onClick={() =>
+              onSubmit(
+                name.trim(),
+                baseUrl.trim(),
+                apiKey.trim() || null,
+                pull ? pull.models.filter((model) => pull.picked.has(model)) : [],
+              )
+            }
           >
-            {busy ? "创建中…" : "创建渠道"}
+            填入表单
           </button>
         </>
       }
@@ -395,11 +456,21 @@ export function QuickImportDialog({
 
       <label className="field">
         <span className="field-label">Base URL</span>
-        <input
-          value={baseUrl}
-          onChange={(event) => setBaseUrl(event.target.value)}
-          autoComplete="off"
-        />
+        <div className="quick-import-url-row">
+          <input
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            className="secondary"
+            disabled={pulling}
+            onClick={() => void pullModels()}
+          >
+            {pulling ? "拉取中…" : "拉取模型"}
+          </button>
+        </div>
       </label>
 
       <label className="field">
@@ -411,6 +482,49 @@ export function QuickImportDialog({
           autoComplete="off"
         />
       </label>
+
+      {pullError ? (
+        <p className="field-hint" role="alert" style={{ color: "var(--danger)" }}>
+          {pullError}
+        </p>
+      ) : null}
+
+      {/* 拉回来就默认全选，这里只用来摘掉不想要的。没拉过就不出现——
+          空列表和「拉回 0 个」是两回事。 */}
+      {pull ? (
+        <div className="field">
+          <div className="model-picker-label-row">
+            <span className="field-label">模型</span>
+            <span className="model-selection-count">
+              {pull.models.length === 0
+                ? "上游没返回模型"
+                : `已选 ${pull.picked.size} / ${pull.models.length}`}
+            </span>
+          </div>
+          {pull.models.length > 0 ? (
+            <>
+              <div className="model-options quick-import-models">
+                {pull.models.map((model) => (
+                  <label
+                    key={model}
+                    className={pull.picked.has(model) ? "model-option is-selected" : "model-option"}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={pull.picked.has(model)}
+                      onChange={(event) => toggleModel(model, event.target.checked)}
+                    />
+                    <span className="model-option-name">{model}</span>
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                选中的写成渠道的精确模型；一个都不选则接收全部模型。
+              </span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </TransferDialog>
   );
 }

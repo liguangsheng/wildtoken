@@ -758,6 +758,24 @@ button.model-selection-remove:focus-visible {
   padding: 18px;
 }
 
+/* Base URL 和「拉取模型」同一行：拉之前必须先有地址，分两行会看起来像无关的两个动作。 */
+.quick-import-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.quick-import-url-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 拉回来的模型列表。不给 min-height——这里的高度跟着模型数走，
+   占满一屏会把下面的 API Key 顶出去。 */
+.model-options.quick-import-models {
+  max-height: 220px;
+  min-height: 0;
+}
+
 /* Scope line in the export dialog and parse/result feedback in the import
    dialog. Tones follow the toast palette so success and failure read the same
    way here as they do elsewhere. */
