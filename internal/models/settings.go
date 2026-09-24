@@ -213,6 +213,9 @@ const (
 	// MaxImageStorageMaxMB is 1 TiB: a typo'd extra digit should be rejected,
 	// not quietly let the directory fill the disk.
 	MaxImageStorageMaxMB int64 = 1 << 20
+	// MaxDashboardMultiplier bounds the display multiplier; beyond this it is
+	// a typo, not a choice.
+	MaxDashboardMultiplier float64 = 1000
 )
 
 // RuntimeSettings is the operator-editable policy stored in SQLite.
@@ -234,9 +237,12 @@ type RuntimeSettings struct {
 	DefaultUpstreamTimeoutSeconds int64 `json:"default_upstream_timeout_seconds"`
 	// ImageStorageMaxMB caps the saved-image directory; the oldest files go
 	// first once it is exceeded. Zero turns saving off and empties it.
-	ImageStorageMaxMB int64  `json:"image_storage_max_mb"`
-	Revision          int64  `json:"revision"`
-	UpdatedAt         string `json:"updated_at"`
+	ImageStorageMaxMB int64 `json:"image_storage_max_mb"`
+	// DashboardMultiplier scales the request and token counts the dashboard
+	// shows. Display only: logs, quotas and stored totals are untouched.
+	DashboardMultiplier float64 `json:"dashboard_multiplier"`
+	Revision            int64   `json:"revision"`
+	UpdatedAt           string  `json:"updated_at"`
 	// DatabaseOverride records that these values came from SQLite rather than
 	// the startup defaults. It is not part of the stored row.
 	DatabaseOverride bool `json:"-"`
@@ -258,6 +264,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		ProxyURL:                          "",
 		DefaultUpstreamTimeoutSeconds:     0,
 		ImageStorageMaxMB:                 DefaultImageStorageMaxMB,
+		DashboardMultiplier:               1,
 		Revision:                          0,
 		UpdatedAt:                         "",
 		DatabaseOverride:                  false,
@@ -286,6 +293,10 @@ func (s *RuntimeSettings) Validate() error {
 		if check.value < check.min || check.value > check.max {
 			return ErrString(check.message)
 		}
+	}
+	// NaN fails both comparisons, so test the accepted range, not the rejected one.
+	if !(s.DashboardMultiplier > 0 && s.DashboardMultiplier <= MaxDashboardMultiplier) {
+		return ErrString("dashboard_multiplier must be greater than 0 and at most 1000")
 	}
 	if err := validateProxyURL(s.ProxyURL, s.ProxyEnabled); err != nil {
 		return err
@@ -322,20 +333,21 @@ func validateProxyURL(value string, enabled bool) error {
 }
 
 type RuntimeSettingsIn struct {
-	LogBodyKeepCount                  int64  `json:"log_body_keep_count"`
-	LogRetentionDays                  int64  `json:"log_retention_days"`
-	LogBodyMaxBytes                   int64  `json:"log_body_max_bytes"`
-	MaxRetries                        int64  `json:"max_retries"`
-	SameUpstreamRetryIntervalMs       int64  `json:"same_upstream_retry_interval_ms"`
-	AutoWeightFailurePenalty          int64  `json:"auto_weight_failure_penalty"`
-	AutoWeightSuccessIncrement        int64  `json:"auto_weight_success_increment"`
-	AutoWeightRecoveryIncrement       int64  `json:"auto_weight_recovery_increment"`
-	AutoWeightRecoveryIntervalSeconds int64  `json:"auto_weight_recovery_interval_seconds"`
-	ProxyEnabled                      bool   `json:"proxy_enabled"`
-	ProxyURL                          string `json:"proxy_url"`
-	DefaultUpstreamTimeoutSeconds     int64  `json:"default_upstream_timeout_seconds"`
-	ImageStorageMaxMB                 int64  `json:"image_storage_max_mb"`
-	Revision                          int64  `json:"revision"`
+	LogBodyKeepCount                  int64   `json:"log_body_keep_count"`
+	LogRetentionDays                  int64   `json:"log_retention_days"`
+	LogBodyMaxBytes                   int64   `json:"log_body_max_bytes"`
+	MaxRetries                        int64   `json:"max_retries"`
+	SameUpstreamRetryIntervalMs       int64   `json:"same_upstream_retry_interval_ms"`
+	AutoWeightFailurePenalty          int64   `json:"auto_weight_failure_penalty"`
+	AutoWeightSuccessIncrement        int64   `json:"auto_weight_success_increment"`
+	AutoWeightRecoveryIncrement       int64   `json:"auto_weight_recovery_increment"`
+	AutoWeightRecoveryIntervalSeconds int64   `json:"auto_weight_recovery_interval_seconds"`
+	ProxyEnabled                      bool    `json:"proxy_enabled"`
+	ProxyURL                          string  `json:"proxy_url"`
+	DefaultUpstreamTimeoutSeconds     int64   `json:"default_upstream_timeout_seconds"`
+	ImageStorageMaxMB                 int64   `json:"image_storage_max_mb"`
+	DashboardMultiplier               float64 `json:"dashboard_multiplier"`
+	Revision                          int64   `json:"revision"`
 }
 
 func (in *RuntimeSettingsIn) Validate() error {
@@ -356,26 +368,28 @@ func (in *RuntimeSettingsIn) Validate() error {
 	candidate.ProxyURL = in.ProxyURL
 	candidate.DefaultUpstreamTimeoutSeconds = in.DefaultUpstreamTimeoutSeconds
 	candidate.ImageStorageMaxMB = in.ImageStorageMaxMB
+	candidate.DashboardMultiplier = in.DashboardMultiplier
 	return candidate.Validate()
 }
 
 type RuntimeSettingsOut struct {
-	LogBodyKeepCount                  int64  `json:"log_body_keep_count"`
-	LogRetentionDays                  int64  `json:"log_retention_days"`
-	LogBodyMaxBytes                   int64  `json:"log_body_max_bytes"`
-	MaxRetries                        int64  `json:"max_retries"`
-	SameUpstreamRetryIntervalMs       int64  `json:"same_upstream_retry_interval_ms"`
-	AutoWeightFailurePenalty          int64  `json:"auto_weight_failure_penalty"`
-	AutoWeightSuccessIncrement        int64  `json:"auto_weight_success_increment"`
-	AutoWeightRecoveryIncrement       int64  `json:"auto_weight_recovery_increment"`
-	AutoWeightRecoveryIntervalSeconds int64  `json:"auto_weight_recovery_interval_seconds"`
-	ProxyEnabled                      bool   `json:"proxy_enabled"`
-	ProxyURL                          string `json:"proxy_url"`
-	DefaultUpstreamTimeoutSeconds     int64  `json:"default_upstream_timeout_seconds"`
-	ImageStorageMaxMB                 int64  `json:"image_storage_max_mb"`
-	Revision                          int64  `json:"revision"`
-	UpdatedAt                         string `json:"updated_at"`
-	DatabaseOverride                  bool   `json:"database_override"`
+	LogBodyKeepCount                  int64   `json:"log_body_keep_count"`
+	LogRetentionDays                  int64   `json:"log_retention_days"`
+	LogBodyMaxBytes                   int64   `json:"log_body_max_bytes"`
+	MaxRetries                        int64   `json:"max_retries"`
+	SameUpstreamRetryIntervalMs       int64   `json:"same_upstream_retry_interval_ms"`
+	AutoWeightFailurePenalty          int64   `json:"auto_weight_failure_penalty"`
+	AutoWeightSuccessIncrement        int64   `json:"auto_weight_success_increment"`
+	AutoWeightRecoveryIncrement       int64   `json:"auto_weight_recovery_increment"`
+	AutoWeightRecoveryIntervalSeconds int64   `json:"auto_weight_recovery_interval_seconds"`
+	ProxyEnabled                      bool    `json:"proxy_enabled"`
+	ProxyURL                          string  `json:"proxy_url"`
+	DefaultUpstreamTimeoutSeconds     int64   `json:"default_upstream_timeout_seconds"`
+	ImageStorageMaxMB                 int64   `json:"image_storage_max_mb"`
+	DashboardMultiplier               float64 `json:"dashboard_multiplier"`
+	Revision                          int64   `json:"revision"`
+	UpdatedAt                         string  `json:"updated_at"`
+	DatabaseOverride                  bool    `json:"database_override"`
 }
 
 func NewRuntimeSettingsOut(s *RuntimeSettings) RuntimeSettingsOut {
@@ -393,6 +407,7 @@ func NewRuntimeSettingsOut(s *RuntimeSettings) RuntimeSettingsOut {
 		ProxyURL:                          s.ProxyURL,
 		DefaultUpstreamTimeoutSeconds:     s.DefaultUpstreamTimeoutSeconds,
 		ImageStorageMaxMB:                 s.ImageStorageMaxMB,
+		DashboardMultiplier:               s.DashboardMultiplier,
 		Revision:                          s.Revision,
 		UpdatedAt:                         s.UpdatedAt,
 		DatabaseOverride:                  s.DatabaseOverride,

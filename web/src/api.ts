@@ -207,6 +207,9 @@ export function saveSettings(payload: RuntimeSettings): Promise<RuntimeSettings>
       auto_weight_recovery_interval_seconds: payload.auto_weight_recovery_interval_seconds,
       proxy_enabled: payload.proxy_enabled,
       proxy_url: payload.proxy_url,
+      default_upstream_timeout_seconds: payload.default_upstream_timeout_seconds,
+      image_storage_max_mb: payload.image_storage_max_mb,
+      dashboard_multiplier: payload.dashboard_multiplier,
       revision: payload.revision,
     }),
   });
@@ -269,6 +272,7 @@ export function fetchDashboard(
   top: TopStats;
   usage: TokenUsage;
   recent: RequestLogPage;
+  multiplier: number;
 }> {
   const dates =
     range === "custom" && custom
@@ -279,7 +283,14 @@ export function fetchDashboard(
     api<TopStats>(`/api/admin/logs/top?window=${range}&limit=5${dates}`),
     api<TokenUsage>(`/api/admin/logs/token-usage?range=${range}${dates}`),
     api<RequestLogPage>("/api/admin/logs/?limit=20"),
-  ]).then(([overview, top, usage, recent]) => ({ overview, top, usage, recent }));
+    getSettings(),
+  ]).then(([overview, top, usage, recent, settings]) => ({
+    overview,
+    top,
+    usage,
+    recent,
+    multiplier: settings.dashboard_multiplier,
+  }));
 }
 
 export function listTokens(): Promise<APIToken[]> {

@@ -180,6 +180,7 @@ const runtimeSettingsColumns = `log_body_keep_count, log_retention_days, log_bod
     proxy_enabled, proxy_url,
     default_upstream_timeout_seconds,
     image_storage_max_mb,
+    dashboard_multiplier,
     revision, updated_at`
 
 func scanRuntimeSettings(row interface{ Scan(...any) error }) (models.RuntimeSettings, error) {
@@ -192,6 +193,7 @@ func scanRuntimeSettings(row interface{ Scan(...any) error }) (models.RuntimeSet
 		&settings.ProxyEnabled, &settings.ProxyURL,
 		&settings.DefaultUpstreamTimeoutSeconds,
 		&settings.ImageStorageMaxMB,
+		&settings.DashboardMultiplier,
 		&settings.Revision, &settings.UpdatedAt)
 	return settings, err
 }
@@ -227,6 +229,7 @@ func UpdateRuntimeSettings(ctx context.Context, db *sql.DB, input *models.Runtim
            proxy_enabled = ?, proxy_url = ?,
            default_upstream_timeout_seconds = ?,
            image_storage_max_mb = ?,
+           dashboard_multiplier = ?,
            revision = revision + 1, updated_at = datetime('now')
        WHERE id = 1 AND revision = ?`,
 		input.LogBodyKeepCount, input.LogRetentionDays, input.LogBodyMaxBytes,
@@ -236,6 +239,7 @@ func UpdateRuntimeSettings(ctx context.Context, db *sql.DB, input *models.Runtim
 		input.ProxyEnabled, trimSpace(input.ProxyURL),
 		input.DefaultUpstreamTimeoutSeconds,
 		input.ImageStorageMaxMB,
+		input.DashboardMultiplier,
 		input.Revision)
 	if err != nil {
 		return models.RuntimeSettings{}, apperr.Database(err)

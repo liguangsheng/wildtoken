@@ -636,6 +636,42 @@ export function SettingsPage({ onUnauthorized }: { onUnauthorized: (message: str
             ) : null}
           </section>
 
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h3>看板显示</h3>
+                <p>看板上的请求数和 Tokens 数乘上这个倍率再显示。日志、令牌用量和配额不受影响。</p>
+              </div>
+              <span className="settings-readonly-tag">全局</span>
+            </div>
+            {settings ? (
+              <div className="settings-server-form">
+                <div className="settings-fields-grid">
+                  <NumberField
+                    label="显示倍率"
+                    value={settings.dashboard_multiplier}
+                    min={0.01}
+                    max={1000}
+                    step={0.01}
+                    hint="1 表示按实际显示。可填小数，如 1.5；结果取整。"
+                    onChange={(v) => patch("dashboard_multiplier", v)}
+                  />
+                </div>
+                <div className="settings-save-row">
+                  <p className="settings-inline-status" role="status" />
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={savingCard !== null}
+                    onClick={() => void save("dashboard")}
+                  >
+                    {savingCard === "dashboard" ? "保存中…" : "保存显示倍率"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
           <section className="settings-card settings-security">
             <div className="settings-card-head">
               <div>
@@ -754,6 +790,7 @@ function NumberField({
   value,
   min,
   max,
+  step,
   hint,
   className,
   onChange,
@@ -762,6 +799,8 @@ function NumberField({
   value: number;
   min: number;
   max: number;
+  /** 不给时浏览器按 1 校验，小数会被判非法。 */
+  step?: number;
   hint?: string;
   className?: string;
   onChange: (value: number) => void;
@@ -773,8 +812,9 @@ function NumberField({
         type="number"
         min={min}
         max={max}
+        step={step}
         required
-        inputMode="numeric"
+        inputMode={step !== undefined && step < 1 ? "decimal" : "numeric"}
         value={value}
         onChange={(event) => onChange(num(event.target.value))}
       />

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { UnauthorizedError, fetchDashboard } from "../api";
+import { scaleDashboard } from "../dashboardScale";
 import type { LogOverview, RequestLog, TokenUsage, TopItem, TopStats } from "../types";
 
 /* 时间档。值直接进 query，必须是后端 parseDashboardRange 认的词。
@@ -285,7 +286,9 @@ export function DashboardPage({ onUnauthorized }: { onUnauthorized: (message: st
       return;
     }
     try {
-      const data = await fetchDashboard(range, custom);
+      const raw = await fetchDashboard(range, custom);
+      // 全局设置里的显示倍率，所有计数在这里统一乘上。
+      const data = { ...raw, ...scaleDashboard(raw, raw.multiplier) };
       setOverview(data.overview);
       setTop(data.top);
       setUsage(data.usage);

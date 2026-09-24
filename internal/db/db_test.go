@@ -91,6 +91,7 @@ func TestUpdateRuntimeSettingsUsesRevisionCompareAndSwap(t *testing.T) {
 		AutoWeightSuccessIncrement:        8,
 		AutoWeightRecoveryIncrement:       12,
 		AutoWeightRecoveryIntervalSeconds: 90,
+		DashboardMultiplier:               1.5,
 		Revision:                          1,
 	}
 
@@ -103,7 +104,8 @@ func TestUpdateRuntimeSettingsUsesRevisionCompareAndSwap(t *testing.T) {
 		updated.AutoWeightFailurePenalty != 25 ||
 		updated.AutoWeightSuccessIncrement != 8 ||
 		updated.AutoWeightRecoveryIncrement != 12 ||
-		updated.AutoWeightRecoveryIntervalSeconds != 90 {
+		updated.AutoWeightRecoveryIntervalSeconds != 90 ||
+		updated.DashboardMultiplier != 1.5 {
 		t.Errorf("unexpected updated settings: %+v", updated)
 	}
 

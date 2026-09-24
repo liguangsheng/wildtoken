@@ -256,6 +256,8 @@ export interface RuntimeSettings {
   default_upstream_timeout_seconds: number;
   /** 生图结果另存为文件的目录上限，单位 MB。0 = 不保存并清空。 */
   image_storage_max_mb: number;
+  /** 看板显示倍率：请求数和 Tokens 乘上它再显示。只影响看板。 */
+  dashboard_multiplier: number;
   revision: number;
   updated_at: string;
 }

@@ -185,6 +185,7 @@ func Init(ctx context.Context, db *sql.DB) error {
 		// 0 means "inherit the startup config"; existing rows keep behaving as before.
 		{"default_upstream_timeout_seconds", "INTEGER NOT NULL DEFAULT 0 CHECK (default_upstream_timeout_seconds BETWEEN 0 AND 3600)"},
 		{"image_storage_max_mb", "INTEGER NOT NULL DEFAULT 10240 CHECK (image_storage_max_mb BETWEEN 0 AND 1048576)"},
+		{"dashboard_multiplier", "REAL NOT NULL DEFAULT 1 CHECK (dashboard_multiplier > 0 AND dashboard_multiplier <= 1000)"},
 	} {
 		if err := ensureColumn(ctx, db, "runtime_settings", column.name, column.definition); err != nil {
 			return err
