@@ -704,6 +704,7 @@ func AdminCreateUpstream(state *appstate.State) http.HandlerFunc {
 
 		state.ModelsCache.Invalidate()
 		state.Routing.Invalidate()
+		state.AutoWeight.Reset(created.ID)
 		applyRuntimeHealth(state, state.AutoWeightPolicy(), &created)
 		apperr.WriteJSON(w, http.StatusCreated, created)
 	}

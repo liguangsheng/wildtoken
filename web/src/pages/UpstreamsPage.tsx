@@ -376,7 +376,8 @@ export function UpstreamsPage({ onUnauthorized }: { onUnauthorized: (message: st
         const saved = isEdit ? await updateUpstream(target.id, payload) : await createUpstream(payload);
         setEditing(null);
         await reload();
-        toast(`渠道 ${saved.name} 已${isEdit ? "保存" : "创建"}。`, { tone: "ok" });
+        const action = isEdit ? "保存" : upstreams.some((u) => u.id === saved.id && u.archived) ? "恢复并更新" : "创建";
+        toast(`渠道 ${saved.name} 已${action}。`, { tone: "ok" });
       } catch (err) {
         fail(err, { prefix: "保存失败" });
       }

@@ -109,6 +109,16 @@ test("流参数维持在调好的值上", () => {
   assert.match(read("web/src/useTicker.ts"), /TICK_MS = 100\b/);
 });
 
+test("可见性恢复会替换挂起的连接，并在新流打开后补拉", () => {
+  const source = read("web/src/useLogStream.ts");
+  assert.match(source, /document\.addEventListener\("visibilitychange", onVisibilityChange\)/);
+  assert.match(source, /connection = null;\s*previous\?\.abort\(\)/);
+  assert.match(source, /const attempt = new AbortController\(\)/);
+  assert.match(source, /signal: attempt\.signal/);
+  assert.match(source, /resyncOnConnect \|\| attempts > 0/);
+  assert.match(source, /if \(stopped \|\| document\.hidden \|\| connection !== null\) return/);
+});
+
 /* 没有令牌时不能静默退出：用户在弹框里登录不会重新触发 effect，
    不排重试的话 SSE 永远连不上，除非刷新整页。实测抓到过。 */
 test("未登录时排一次重试，而不是放弃", () => {

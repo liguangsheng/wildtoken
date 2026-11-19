@@ -66,16 +66,18 @@ export function useLogStream(enabled: boolean, onResync: () => void): LogStreamS
       return;
     }
 
-    const controller = new AbortController();
     let attempts = 0;
     let reconnectTimer: number | null = null;
     let batchTimer: number | null = null;
     let pending: RequestLog[] = [];
     let stopped = false;
+    let connection: AbortController | null = null;
+    let resyncOnConnect = false;
 
     /* 新日志先攒着，80ms 冲一次。高频时逐条 setState 会让 React 每条
        都重渲染一次整张表。 */
     const flush = () => {
+      if (batchTimer !== null) window.clearTimeout(batchTimer);
       batchTimer = null;
       if (pending.length === 0) return;
       const incoming = pending;
@@ -187,7 +189,7 @@ export function useLogStream(enabled: boolean, onResync: () => void): LogStreamS
     };
 
     const scheduleReconnect = () => {
-      if (stopped || reconnectTimer !== null) return;
+      if (stopped || document.hidden || connection !== null || reconnectTimer !== null) return;
       const exponent = Math.min(attempts, 5);
       const base = Math.min(RECONNECT_MIN_MS * 2 ** exponent, RECONNECT_MAX_MS);
       attempts += 1;
@@ -200,12 +202,15 @@ export function useLogStream(enabled: boolean, onResync: () => void): LogStreamS
     };
 
     const connect = async () => {
-      if (stopped) return;
+      if (stopped || document.hidden || connection !== null) return;
+      const attempt = new AbortController();
+      connection = attempt;
       const token = getAdminToken();
       if (!token) {
         /* 还没登录。不能就此放弃——用户待会就会在弹框里输令牌，
            而那不会重新触发这个 effect。排一次重试，退避逻辑会把间隔
            拉开，不会忙等。 */
+        connection = null;
         scheduleReconnect();
         return;
       }
@@ -214,7 +219,7 @@ export function useLogStream(enabled: boolean, onResync: () => void): LogStreamS
         const response = await fetch(STREAM_PATH, {
           cache: "no-store",
           headers: { Accept: "text/event-stream", "x-admin-token": token },
-          signal: controller.signal,
+          signal: attempt.signal,
         });
         if (response.status === 401) {
           /* 令牌失效不是断线：清掉并弹登录框。退避重连会等到有了新令牌再连，
@@ -224,30 +229,61 @@ export function useLogStream(enabled: boolean, onResync: () => void): LogStreamS
         }
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         if (!response.body) throw new Error("日志流不可用");
+        if (connection !== attempt || attempt.signal.aborted || document.hidden) return;
         openedAt = Date.now();
         setState((prev) => ({ ...prev, connected: true }));
-        // 重连后可能漏了行，让调用方补一次全量。
-        if (attempts > 0) resyncRef.current();
+        // 页面休眠恢复后必须补齐断开期间的日志，再继续实时推送。
+        if (resyncOnConnect || attempts > 0) {
+          resyncOnConnect = false;
+          resyncRef.current();
+        }
         await consume(response.body);
       } catch {
         /* 断线是常态，安静重连。这里不能报错：流断了列表和手动刷新
            照常可用，弹一堆错误反而扰民。finally 里排重连。 */
-        return;
       } finally {
-        if (!stopped) {
-          setState((prev) => ({ ...prev, connected: false }));
-          // 连稳过才清退避计数，否则闪断会直接冲到上限。
-          if (openedAt && Date.now() - openedAt >= STABLE_CONNECTION_MS) attempts = 0;
-          scheduleReconnect();
+        if (connection === attempt) {
+          connection = null;
+          if (!stopped) {
+            setState((prev) => ({ ...prev, connected: false }));
+            // 连稳过才清退避计数，否则闪断会直接冲到上限。
+            if (openedAt && Date.now() - openedAt >= STABLE_CONNECTION_MS) attempts = 0;
+            scheduleReconnect();
+          }
         }
       }
     };
 
-    void connect();
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        flush();
+        if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        const previous = connection;
+        connection = null;
+        previous?.abort();
+        setState((prev) => prev.connected ? { ...prev, connected: false } : prev);
+        return;
+      }
+
+      // 浏览器恢复时旧 fetch 可能仍挂起，主动换新连接并补拉当前日志页。
+      resyncOnConnect = true;
+      attempts = 0;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      void connect();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (document.hidden) resyncOnConnect = true;
+    else void connect();
 
     return () => {
       stopped = true;
-      controller.abort();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      const previous = connection;
+      connection = null;
+      previous?.abort();
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (batchTimer !== null) window.clearTimeout(batchTimer);
     };

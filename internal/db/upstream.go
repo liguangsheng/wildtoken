@@ -313,10 +313,9 @@ func boolToInt64(value bool) int64 {
 	return 0
 }
 
-// CreateUpstream stores a new channel. A missing timeout is stored as 0, which
-// requests resolve to the service default when they run. Stored as the
-// default's value on the day, a channel created blank never followed a later
-// change to it, and nothing in the console could make it.
+// CreateUpstream creates a channel or replaces an archived namesake in place.
+// Configuration, keys and groups all come from input. A missing timeout stores
+// 0, so requests follow the service default when they run.
 func CreateUpstream(ctx context.Context, db *sql.DB, input *models.UpstreamIn) (models.UpstreamOut, error) {
 	var timeout float64
 	if input.TimeoutSeconds != nil {
@@ -336,19 +335,30 @@ func CreateUpstream(ctx context.Context, db *sql.DB, input *models.UpstreamIn) (
 	}
 	defer tx.Rollback()
 
-	result, err := tx.ExecContext(ctx, `INSERT INTO upstreams
+	var id int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO upstreams
         (name, base_url, model_names, model_prefixes, model_mappings,
          effort_mappings, priority, weight, auto_weight_enabled, enabled,
          extra_headers, timeout_seconds, rate_limit, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT (name) DO UPDATE SET
+            base_url = excluded.base_url,
+            model_names = excluded.model_names, model_prefixes = excluded.model_prefixes,
+            model_mappings = excluded.model_mappings, effort_mappings = excluded.effort_mappings,
+            priority = excluded.priority, weight = excluded.weight,
+            auto_weight_enabled = excluded.auto_weight_enabled, enabled = excluded.enabled,
+            extra_headers = excluded.extra_headers, timeout_seconds = excluded.timeout_seconds,
+            rate_limit = excluded.rate_limit, archived = 0, archived_prev_enabled = NULL,
+            updated_at = excluded.updated_at
+        WHERE upstreams.archived = 1
+        RETURNING id`,
 		input.Name, input.BaseURL, encoded.Names, encoded.Prefixes,
 		encoded.ModelMappings, encoded.EffortMappings, input.Priority, input.Weight,
 		boolToInt64(input.AutoWeightEnabled), boolToInt64(input.Enabled),
-		encoded.Headers, timeout, rateLimit)
-	if err != nil {
-		return models.UpstreamOut{}, apperr.Database(err)
+		encoded.Headers, timeout, rateLimit).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.UpstreamOut{}, apperr.BadRequest("upstream name already exists")
 	}
-	id, err := result.LastInsertId()
 	if err != nil {
 		return models.UpstreamOut{}, apperr.Database(err)
 	}

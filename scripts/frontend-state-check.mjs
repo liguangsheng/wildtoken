@@ -29,7 +29,8 @@ function installMocks() {
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", keys: [],
   };
   const state = window.__test = {
-    requests: [], holds: [], errors: [], channels: [channel, { ...channel, id: 2, name: "test-channel-2" }], imageBody: "null",
+    requests: [], holds: [], errors: [], streamConnections: 0,
+    channels: [channel, { ...channel, id: 2, name: "test-channel-2" }], imageBody: "null",
     failures: new Set(JSON.parse(new URL(location.href).searchParams.get("fail") ?? "[]")),
     settings: {
       log_body_keep_count: 100, log_retention_days: 30, log_body_max_bytes: 204800,
@@ -67,11 +68,11 @@ function installMocks() {
   const json = (body, status = 200) => new Response(JSON.stringify(body), {
     status, headers: { "content-type": "application/json" },
   });
-  state.pushLog = (patch = {}) => {
+  state.pushLog = (patch = {}, notify = true) => {
     const id = state.logs[0].id + 1;
     const log = { ...state.logs[0], id, created_at: new Date(Date.UTC(2026, 0, 1) + id * 1000).toISOString(), ...patch };
     state.logs.unshift(log);
-    state.emit("log", { log, recent_rpm: 1, recent_tpm: 30 });
+    if (notify) state.emit?.("log", { log, recent_rpm: 1, recent_tpm: 30 });
     return id;
   };
   window.fetch = async (input, init = {}) => {
@@ -81,6 +82,7 @@ function installMocks() {
     if (state.failures.has(url.pathname)) return json({ detail: "simulated failure" }, 503);
     if (url.pathname === "/api/admin/logs/clients") return json({ client_types: ["client-0", "client-1"] });
     if (url.pathname === "/api/admin/logs/stream") {
+      state.streamConnections += 1;
       return new Response(new ReadableStream({ start(controller) {
         state.emit = (type, body) => controller.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(body)}\n\n`));
         init.signal?.addEventListener("abort", () => controller.close(), { once: true });
@@ -550,6 +552,32 @@ addCase("lazy-pages", async (page, open) => {
   await page.click(".topbar-nav [data-view=images]");
   await page.waitFor(() => document.querySelector("section[data-view=images]")?.hidden === false);
   assert.equal(await page.evaluate(() => document.querySelector('section[data-view="images"] .debug-body').value), imageDraft);
+  assert.deepEqual(await page.evaluate(() => window.__test.errors), []);
+});
+
+addCase("logs-visibility-resume", async (page, open) => {
+  await open("logs");
+  await page.waitFor(() => document.querySelectorAll("[data-log-id]").length === 50 && window.__test.streamConnections === 1);
+  await page.waitForSelector(".live-indicator.is-live");
+  await page.evaluate(() => {
+    window.__test.documentHidden = false;
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => window.__test.documentHidden });
+    window.__test.documentHidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForSelector(".live-indicator:not(.is-live)");
+  const recoveredId = await page.evaluate(() => window.__test.pushLog({ model: "created-while-hidden" }, false));
+  await page.evaluate(() => {
+    window.__test.documentHidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitFor((id) => document.querySelector(`[data-log-id="${id}"]`) !== null, {}, recoveredId);
+  await page.waitForSelector(".live-indicator.is-live");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 250)));
+  assert.equal(await page.evaluate(() => window.__test.streamConnections), 2, "唤醒只建立一个新流");
+  assert.equal(await page.evaluate((id) => document.querySelectorAll(`[data-log-id="${id}"]`).length, recoveredId), 1, "补拉与推送不重复显示日志");
+  await page.evaluate(() => window.__test.pushLog({ model: "after-resume" }));
+  await page.waitFor(() => document.querySelector("[data-log-id]")?.textContent.includes("after-resume"));
   assert.deepEqual(await page.evaluate(() => window.__test.errors), []);
 });
 

@@ -12,6 +12,7 @@
  *   node scripts/browser-check.mjs           # 复用已构建的 web/dist
  *   node scripts/browser-check.mjs --build   # 先跑 npm run build
  *   node scripts/browser-check.mjs --copy-only # 渠道复制及其前置检查
+ *   node scripts/browser-check.mjs --archive-create-only # 归档重名创建及其前置检查
  *
  * 端口另选，不碰 3100 上跑着的部署实例。
  */
@@ -1238,6 +1239,69 @@ async function main() {
     });
 
     if (process.argv.includes("--copy-only")) {
+      reportResults();
+      return;
+    }
+
+    for (const quick of [false, true]) {
+      await check(`${quick ? "快速导入" : "新建渠道"}以新配置替换同名归档渠道`, async () => {
+        const name = quick ? "archived-quick-create" : "archived-manual-create";
+        const old = await adminPost("/api/admin/upstreams/", upstreamPayload({
+          name, base_url: "https://old.example.test", api_key: "sk-old-archived",
+          model_names: ["old-model"], extra_headers: { "X-Old": "old" }, enabled: false,
+        }));
+        try {
+          const archive = await fetch(`${ORIGIN}/api/admin/upstreams/${old.id}/archived`, {
+            method: "PATCH", headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+            body: JSON.stringify({ archived: true }),
+          });
+          assertEqual(archive.status, 200, "准备归档渠道");
+          await clickButton(page, ".upstream-toolbar", "刷新");
+          await page.waitFor((name) => document.querySelector(".archived-body")?.textContent.includes(name),
+            { label: "同名渠道已归档" }, name);
+
+          if (quick) {
+            await clickButton(page, ".upstream-toolbar", "快速导入");
+            const dialog = "dialog.quick-import-dialog[open]";
+            await page.waitForSelector(dialog);
+            await page.fill(`${dialog} #quick-import-name`, name);
+            await page.fill(`${dialog} #quick-import-url`, "https://new.example.test/v1");
+            await page.fill(`${dialog} #quick-import-apikey`, "sk-new-archived");
+            await clickButton(page, `${dialog} .modal-footer`, "继续配置", true);
+          } else {
+            await clickButton(page, ".upstream-toolbar", "新增渠道");
+          }
+          await page.waitForSelector(UPSTREAM_EDITOR);
+          if (!quick) {
+            await page.fill(`${UPSTREAM_EDITOR} [data-ue-field=name]`, name);
+            await page.fill(`${UPSTREAM_EDITOR} [data-ue-field=baseUrl]`, "https://new.example.test/v1");
+          }
+          await saveEditor(page);
+          await page.waitFor((name) => [...document.querySelectorAll(".toast-message")]
+            .some((node) => node.textContent.includes(`渠道 ${name} 已恢复并更新`)),
+            { label: "归档替换保存提示" }, name);
+          const saved = await storedUpstream(page, name);
+          assertEqual(saved.id, old.id, "保留渠道 ID");
+          assertEqual(saved.archived, false, "已恢复到主列表");
+          assertEqual(saved.enabled, true, "使用新表单的启用状态");
+          assertEqual(saved.base_url, "https://new.example.test/v1", "使用新地址");
+          assertEqual(saved.priority, quick ? 999 : 100, "使用新优先级");
+          assertEqual(saved.key_count, quick ? 1 : 0, "旧 Key 不残留");
+          assertEqual(JSON.stringify(saved.model_names), "[]", "旧模型不残留");
+          assertEqual(JSON.stringify(saved.extra_headers), "{}", "旧 Header 不残留");
+          assertEqual(saved.timeout_seconds, 0, "使用新表单默认超时");
+        } finally {
+          await fetch(`${ORIGIN}/api/admin/upstreams/${old.id}`, {
+            method: "DELETE", headers: { "x-admin-token": ADMIN_TOKEN },
+          });
+          await clickButton(page, ".upstream-toolbar", "刷新");
+          await page.waitFor((name) => ![...document.querySelectorAll("table tbody tr")]
+            .some((row) => row.textContent.includes(name)), { label: "归档替换检查清理" }, name);
+        }
+      });
+    }
+
+    if (process.argv.includes("--archive-create-only")) {
       reportResults();
       return;
     }
