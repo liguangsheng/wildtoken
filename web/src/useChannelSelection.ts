@@ -23,7 +23,10 @@ export function useChannelSelection(active: boolean, onUnauthorized: (message: s
   const toggleChannel = useCallback((id: number) => {
     setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   }, []);
+  const selectChannels = useCallback((ids: number[]) => {
+    setChosen([...new Set(ids)].filter((id) => liveIds.has(id)));
+  }, [liveIds]);
   const modelOptions = useMemo(() => candidateModels(upstreams, selected), [upstreams, selected]);
 
-  return { upstreams, selected, toggleChannel, modelOptions, error: resource.error, loading: resource.loading, reload: resource.reload };
+  return { upstreams, selected, toggleChannel, selectChannels, modelOptions, error: resource.error, loading: resource.loading, reload: resource.reload };
 }

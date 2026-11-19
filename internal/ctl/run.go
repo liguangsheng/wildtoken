@@ -129,7 +129,7 @@ func run(ctx context.Context, o options, args []string, stdin io.Reader, stdout 
 		o.json = true
 		failed := false
 		err := c.Stream(ctx, command.Method, path, command.Auth, query, body, func(event client.Event) error {
-			if command.Name == "upstreams debug" {
+			if command.Name == "upstreams debug" || command.Name == "debug" {
 				failed = failed || event.Event == "error"
 				if event.Event == "response" {
 					raw, _ := json.Marshal(event.Data)

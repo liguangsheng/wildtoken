@@ -724,8 +724,12 @@ func baseLogEntry(requestCtx RequestContext, upstream *models.UpstreamRow,
 	prepared *PreparedRequest) LogEntry {
 	upstreamID := upstream.ID
 	upstreamName := upstream.Name
-	tokenID := requestCtx.DownstreamTokenID
-	tokenName := requestCtx.DownstreamTokenName
+	var tokenID *int64
+	var tokenName *string
+	if requestCtx.DownstreamTokenID > 0 {
+		tokenID = &requestCtx.DownstreamTokenID
+		tokenName = &requestCtx.DownstreamTokenName
+	}
 	clientType := requestCtx.ClientType
 
 	// nil rather than a pointer to "": the column means "not known", and an
@@ -739,8 +743,8 @@ func baseLogEntry(requestCtx RequestContext, upstream *models.UpstreamRow,
 	return LogEntry{
 		Method:                  requestCtx.Method,
 		Path:                    requestCtx.Path,
-		DownstreamTokenID:       &tokenID,
-		DownstreamTokenName:     &tokenName,
+		DownstreamTokenID:       tokenID,
+		DownstreamTokenName:     tokenName,
 		ClientIP:                clientIP,
 		ClientType:              &clientType,
 		UpstreamID:              &upstreamID,

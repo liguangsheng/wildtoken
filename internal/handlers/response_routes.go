@@ -80,7 +80,7 @@ func responseRouteKey(route *models.ResponseRoute, selected *proxy.Selection) (m
 
 func rememberResponseRoute(r *http.Request, state *appstate.State, config proxyAttemptConfig,
 	upstream models.UpstreamRow, key models.UpstreamKey, prepared *proxy.PreparedRequest) func(string) error {
-	if r.Method != http.MethodPost || config.path != "responses" {
+	if config.auth.TokenID <= 0 || r.Method != http.MethodPost || config.path != "responses" {
 		return nil
 	}
 	var options struct {

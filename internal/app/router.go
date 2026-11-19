@@ -78,6 +78,7 @@ func mountAdminRoutes(router chi.Router, state *appstate.State) {
 			settings.Delete("/model-test-prompts/{id}", handlers.AdminDeleteModelTestPromptTemplate(state))
 		})
 
+		admin.Post("/debug", handlers.AdminDebugRoute(state))
 		admin.Get("/system", handlers.AdminSystemInfo(state))
 		admin.Get("/system/metrics", handlers.AdminRuntimeMetrics(state))
 

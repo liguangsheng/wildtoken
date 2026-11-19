@@ -138,5 +138,6 @@ test("没有自造的 class", () => {
      model-route 一系、status-active 一系，都是旧版真实在用的类。
      再抬到 480：看板的用量日历加了 usage-calendar 一系 14 个，颜色取自主题变量。
      再抬到 520：渠道编辑和快速导入重做，加了 ue-、qi-、mc- 三系，颜色取自主题变量。 */
-  assert.ok(used.size < 520, `用到的 class 涨到 ${used.size} 个，检查是否在自造样式`);
+  // 会话调试新增布局类，仍必须通过上面的共享 CSS 契约。
+  assert.ok(used.size < 540, `用到的 class 涨到 ${used.size} 个，检查是否在自造样式`);
 });

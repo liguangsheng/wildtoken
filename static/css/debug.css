@@ -1,7 +1,4 @@
-/* ── 调试页 ─────────────────────────────────────────────────
-   左右各一半：左边是表单（参数卡在上、请求体在下），右边是结果，多个渠道
-   从上往下排。窄屏上下叠。卡片、字段和结果块都借现成的 settings-card /
-   field / test-model-*，这里只管布局和几处特有控件。 */
+/* 调试和生图共用的渠道、状态与报文样式。 */
 
 .debug-layout {
   align-items: start;
@@ -171,6 +168,128 @@
   .debug-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* 会话、聊天、参数各占一栏，长消息只滚动聊天区。 */
+.debug-workspace {
+  --debug-height: max(560px, calc(100dvh - 154px));
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 210px minmax(0, 1fr) 300px;
+}
+.debug-workspace > * { min-width: 0; }
+.debug-workspace [hidden] { display: none; }
+.debug-sidebar { display: grid; gap: 12px; max-height: var(--debug-height); padding: 12px; }
+.debug-history { display: grid; gap: 12px; min-height: 0; }
+.debug-session-items { display: grid; gap: 6px; max-height: calc(var(--debug-height) - 230px); overflow: auto; }
+.debug-recent-item {
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  box-shadow: none;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  text-align: left;
+  width: 100%;
+}
+.debug-recent-item strong, .debug-recent-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug-recent-item strong { font-size: var(--text-sm); }
+.debug-recent-item > span { color: var(--muted); font-size: var(--text-xs); }
+.debug-recent-item:hover, .debug-recent-item[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent-border); }
+.debug-picker-actions { display: flex; flex-wrap: wrap; gap: 2px; }
+.debug-picker-actions button { font-size: var(--text-xs); padding-inline: 6px; }
+.debug-picker-actions button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.debug-workspace .debug-channel:has(input:checked) { background: var(--accent-soft); }
+
+.debug-bar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.debug-bar > h3 { flex: 1; font-size: var(--text-md); margin: 0; }
+.debug-bar > .muted:first-child, .debug-bar > .debug-tabs { margin-right: auto; }
+.debug-bar > .muted { font-size: var(--text-xs); }
+.debug-chat { display: flex; flex-direction: column; height: var(--debug-height); min-height: 0; padding: 0; overflow: hidden; }
+.debug-chat-head { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 12px; padding: 14px; }
+.debug-chat-head > div { flex: 1; min-width: 0; max-width: 100%; }
+.debug-chat-head h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug-chat-head > .field { flex: 1; min-width: 160px; max-width: 100%; }
+.debug-thread { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 14px; }
+.debug-chat .conv-summary, .debug-chat .conv-summary-actions { flex-wrap: wrap; }
+.debug-chat .conv-summary-actions { flex: 0 1 auto; }
+.debug-turn { display: grid; gap: 10px; margin-bottom: 22px; min-width: 0; }
+.debug-user-message { background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: var(--radius-md); margin-left: auto; max-width: 94%; padding: 10px 14px; }
+.debug-user-message > span { color: var(--muted); font-size: var(--text-xs); }
+.debug-user-message > p { font-size: var(--text-base); margin: 4px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.debug-context-choice { background: var(--warning-soft); border: 1px solid var(--warning-border); border-radius: var(--radius); padding: 10px; }
+.debug-context-choice button { max-width: 100%; text-align: left; white-space: normal; }
+.debug-workspace .debug-compose { background: var(--panel-solid); border-top: 1px solid var(--line); display: flex; flex: 0 0 auto; flex-direction: column; gap: 8px; padding: 12px; }
+.debug-workspace .debug-compose > textarea { min-height: 82px; max-height: 200px; resize: vertical; }
+.debug-bar .debug-stream-toggle { min-height: 0; white-space: nowrap; }
+.debug-template { align-items: end; display: flex; gap: 8px; }
+.debug-template > .field { flex: 1; min-width: 0; }
+.debug-template > button { flex-shrink: 0; min-height: var(--control-h); }
+.debug-workspace .debug-options { align-items: start; }
+.debug-workspace .debug-params { gap: 12px; max-height: var(--debug-height); overflow: auto; padding: 14px; }
+.debug-params fieldset { border: 0; display: grid; gap: 14px; min-width: 0; padding: 0; }
+.debug-workspace .debug-channel-list { max-height: 176px; }
+
+.debug-tabs { border-bottom: 1px solid var(--line); display: flex; gap: 4px; }
+.debug-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--muted);
+  min-height: 34px;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+.debug-tabs button:hover { background: var(--panel-muted); box-shadow: none; color: var(--text); }
+.debug-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
+
+.debug-system summary { cursor: pointer; font-size: var(--text-sm); }
+.debug-system > .field { margin-top: 10px; }
+.debug-workspace .debug-body { min-height: 240px; }
+.debug-workspace [role="alert"] { color: var(--danger); overflow-wrap: anywhere; }
+.debug-sendbar { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
+.debug-sendbar > p { flex: 1; margin: 0; min-width: 0; }
+.debug-sendbar .debug-actions { flex-shrink: 0; }
+
+.debug-workspace .debug-empty { align-items: center; display: flex; flex-direction: column; gap: 12px; justify-content: center; min-height: 100%; padding: 24px; text-align: center; }
+.debug-workspace .debug-empty p { color: var(--muted); margin: 0; max-width: 40ch; }
+.debug-result-grid { align-items: start; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); min-width: 0; }
+.debug-workspace .test-model-result-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+.debug-workspace .test-model-result-head strong { overflow-wrap: anywhere; }
+.debug-workspace .debug-run-meta { gap: 6px 14px; justify-content: flex-start; }
+.debug-workspace .debug-run-reply { max-height: none; min-height: 70px; }
+.debug-run > .debug-tabs { padding-inline: 12px; }
+.debug-run > .debug-bar { border-top: 1px solid var(--line); padding: 6px 12px; }
+.debug-workspace .debug-run > pre,
+.debug-workspace .debug-run [role="tabpanel"] > pre { background: var(--code-bg); color: var(--code-text); max-height: 520px; min-height: 180px; overflow: auto; }
+
+@media (max-width: 1180px) {
+  .debug-workspace { --debug-height: max(540px, calc(100dvh - 260px)); grid-template-columns: minmax(0, 1fr) 280px; }
+  .debug-sidebar { grid-column: 1 / -1; max-height: none; }
+  .debug-sidebar > .debug-bar { justify-content: space-between; }
+  .debug-session-items { max-height: 220px; }
+}
+
+@media (max-width: 820px) {
+  .debug-workspace { grid-template-columns: minmax(0, 1fr); }
+  .debug-sidebar { grid-column: auto; order: 1; }
+  .debug-workspace .debug-params { max-height: none; order: 2; }
+  .debug-chat { height: max(520px, calc(100dvh - 230px)); order: 3; scroll-margin-top: calc(var(--topbar-height) + 12px); }
+}
+
+@media (max-width: 760px), (orientation: portrait) and (max-width: 960px) {
+  html:has(.view[data-view="debug"]:not([hidden])) { height: auto; overflow-x: clip; overflow-y: auto; }
+  html:has(.view[data-view="debug"]:not([hidden])) body { height: auto; overflow: visible; }
+  html:has(.view[data-view="debug"]:not([hidden])) .topbar { background: var(--panel-solid); }
+}
+
+@media (max-width: 520px) {
+  .debug-chat-head { align-items: stretch; flex-direction: column; }
+  .debug-sendbar { align-items: stretch; flex-direction: column; }
+  .debug-sendbar .primary { flex: 1; }
 }
 
 /* ── 生图页 ── 结果区换成图墙，其余沿用调试页。 */

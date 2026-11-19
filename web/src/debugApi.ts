@@ -7,6 +7,13 @@ import { send } from "./api";
 import { parseStreamEvent } from "./useLogStream";
 
 export type DebugProtocol = "responses" | "chat_completions" | "messages" | "images";
+export const ROUTED_TARGET = 0;
+export interface DebugPayload {
+  protocol: DebugProtocol;
+  model: string;
+  body: unknown;
+  group_id?: number;
+}
 
 export type DebugEvent =
   | { type: "request"; url: string; headers: Record<string, string>; body: unknown }
@@ -23,13 +30,15 @@ export type DebugEvent =
  */
 export async function runDebug(
   upstreamId: number,
-  payload: { protocol: DebugProtocol; model: string; body: unknown },
+  payload: DebugPayload,
   onEvent: (event: DebugEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const response = await send(`/api/admin/upstreams/${upstreamId}/debug`, {
+  const { group_id, ...direct } = payload;
+  const path = upstreamId === ROUTED_TARGET ? "/api/admin/debug" : `/api/admin/upstreams/${upstreamId}/debug`;
+  const response = await send(path, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(upstreamId === ROUTED_TARGET ? { ...direct, group_id } : direct),
     headers: { accept: "text/event-stream" },
     signal,
   });

@@ -8,13 +8,15 @@
 import type { DebugProtocol } from "./debugApi";
 import type { Upstream } from "./types";
 
-export const DEBUG_PROTOCOLS: ReadonlyArray<{ value: DebugProtocol; label: string }> = [
-  { value: "responses", label: "Responses（codex-tui）" },
-  { value: "chat_completions", label: "Chat Completions（opencode）" },
-  { value: "messages", label: "Messages（claude-cli）" },
+export type TextProtocol = Exclude<DebugProtocol, "images">;
+
+export const DEBUG_PROTOCOLS: ReadonlyArray<{ value: TextProtocol; label: string; path: string }> = [
+  { value: "responses", label: "OpenAI Responses", path: "/v1/responses" },
+  { value: "chat_completions", label: "OpenAI Chat Completions", path: "/v1/chat/completions" },
+  { value: "messages", label: "Anthropic Messages", path: "/v1/messages?beta=true" },
 ];
 
-type JSONObject = Record<string, unknown>;
+export type JSONObject = Record<string, unknown>;
 
 /** [1m] 是 CLI 侧的 1M 上下文别名，只影响请求头；上游只认去掉后缀的 id。 */
 function stripContext1M(model: string): string {
@@ -47,8 +49,13 @@ export function withStream(protocol: DebugProtocol, body: JSONObject, stream: bo
   else delete next.stream;
 
   if (protocol === "chat_completions") {
-    if (stream) next.stream_options = { include_usage: true };
-    else delete next.stream_options;
+    if (stream) {
+      const options = body.stream_options;
+      next.stream_options = {
+        ...(options && typeof options === "object" && !Array.isArray(options) ? options : {}),
+        include_usage: true,
+      };
+    } else delete next.stream_options;
   }
   return next;
 }

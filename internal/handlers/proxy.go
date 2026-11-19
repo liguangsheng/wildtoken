@@ -212,6 +212,9 @@ func (g *abortLogGuard) setModel(model *string) {
 }
 
 func (g *abortLogGuard) setDownstreamToken(tokenID int64, tokenName string) {
+	if tokenID <= 0 {
+		return
+	}
 	g.active.SetDownstreamToken(tokenID, tokenName)
 	if g.entry == nil {
 		return
@@ -382,8 +385,16 @@ func (g *abortLogGuard) elapsed() *int32 {
 
 // ProxyHandler forwards OpenAI-compatible requests to upstream providers.
 func ProxyHandler(state *appstate.State) http.HandlerFunc {
+	return proxyHandler(state, nil)
+}
+
+// admin 只由已鉴权的调试入口提供，不接受请求头或请求体中的身份。
+func proxyHandler(state *appstate.State, admin *middleware.DownstreamAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth, ok := middleware.DownstreamAuthFrom(r.Context())
+		if admin != nil {
+			auth, ok = *admin, true
+		}
 		if !ok {
 			writeProtocolError(w, http.StatusUnauthorized, r.URL.Path,
 				"Incorrect API key provided", "invalid_api_key")
@@ -535,7 +546,11 @@ func ProxyHandler(state *appstate.State) http.HandlerFunc {
 		}
 		guard.disarm()
 
-		client.deliver(response)
+		if err := client.deliver(response); err != nil {
+			if observer, ok := w.(interface{ recordStreamError(error) }); ok {
+				observer.recordStreamError(err)
+			}
+		}
 	}
 }
 
@@ -1009,7 +1024,7 @@ func (d *downstream) flush() {
 
 // deliver copies an upstream response downstream, streaming it as it arrives
 // so an SSE body is not buffered.
-func (d *downstream) deliver(response *proxy.Response) {
+func (d *downstream) deliver(response *proxy.Response) error {
 	defer response.Body.Close()
 	d.sendHeader(response)
 
@@ -1018,12 +1033,15 @@ func (d *downstream) deliver(response *proxy.Response) {
 		read, err := response.Body.Read(buffer)
 		if read > 0 {
 			if _, writeErr := d.w.Write(buffer[:read]); writeErr != nil {
-				return
+				return writeErr
 			}
 			d.flush()
 		}
 		if err != nil {
-			return
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
 	}
 }

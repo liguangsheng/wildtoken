@@ -41,6 +41,7 @@ var commands = []Command{
 	{Name: "active", Method: "GET", Path: "/health/active", Auth: client.Public},
 	{Name: "themes", Method: "GET", Path: "/api/themes", Auth: client.Public},
 	{Name: "models list", Method: "GET", Path: "/v1/models", Auth: client.Downstream},
+	streamCommand("debug", "POST", "/debug", true),
 	command("status", "GET", "/system", false),
 	command("metrics", "GET", "/system/metrics", false),
 	command("settings get", "GET", "/settings/", false),

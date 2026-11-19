@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Page, attachPage, launchChrome } from "./browser-check.mjs";
+import { addDebugCases } from "./debug-workspace-checks.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const cases = [];
@@ -14,6 +15,11 @@ const addCase = (name, run) => cases.push({ name, run });
 
 function installMocks() {
   localStorage.setItem("wildtoken_admin_token", "frontend-state-check-token");
+  const caseId = new URL(location.href).searchParams.get("case");
+  if (sessionStorage.getItem("debug-test-case") !== caseId) {
+    localStorage.removeItem("wildtoken_debug_sessions_v1");
+    sessionStorage.setItem("debug-test-case", caseId);
+  }
   const channel = {
     id: 1, name: "test-channel", base_url: "http://fake.invalid", enabled: true, archived: false,
     model_names: ["test-model"], model_prefixes: [], model_mappings: {}, effort_mappings: {},
@@ -155,22 +161,44 @@ function installMocks() {
       }));
     }
     if (url.pathname === "/api/admin/settings/model-test-prompts") {
-      const templates = [{ id: 1, name: "server-template", prompt: "server-prompt" }];
+      const templates = [
+        { id: 1, name: "server-template", prompt: "server-prompt" },
+        { id: 2, name: "alternate-template", prompt: "alternate-prompt" },
+      ];
       if (location.hash === "#debug") {
         return new Promise((done) => state.holds.push({ path: "templates", release: () => done(json(templates)) }));
       }
       return json(templates);
     }
 
-    if (/\/upstreams\/\d+\/debug$/.test(url.pathname)) {
+    if (url.pathname === "/api/admin/debug" || /\/upstreams\/\d+\/debug$/.test(url.pathname)) {
+      const id = url.pathname === "/api/admin/debug" ? 0 : Number(url.pathname.split("/").at(-2));
+      const payload = JSON.parse(init.body);
+      const reply = state.debugResponses?.[id];
       const events = [
-        ["response", { status_code: 200, headers: {}, ttfb_ms: 1 }],
-        ["chunk", { text: state.imageBody, elapsed_ms: 2 }],
+        ["request", { url: `https://fake.invalid/v1/${payload.protocol}`, headers: { authorization: "Bearer [redacted]" }, body: payload.body }],
+        ["response", { status_code: reply?.status ?? 200, headers: { "content-type": "application/json" }, ttfb_ms: 1 }],
+        ["chunk", { text: reply?.body ?? state.imageBody, elapsed_ms: 2 }],
         ["done", { elapsed_ms: 3 }],
       ];
-      return new Response(events.map(([type, body]) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`).join(""), {
-        headers: { "content-type": "text/event-stream" },
-      });
+      const frame = ([type, body]) => `event: ${type}\ndata: ${JSON.stringify(body)}\n\n`;
+      if (state.holdDebug) {
+        return new Response(new ReadableStream({ start(controller) {
+          const encoder = new TextEncoder();
+          let closed = false;
+          const abort = () => { closed = true; controller.error(new DOMException("Aborted", "AbortError")); };
+          init.signal?.addEventListener("abort", abort, { once: true });
+          controller.enqueue(encoder.encode(events.slice(0, 3).map(frame).join("")));
+          state.holds.push({ path: `debug:${id}`, release: () => {
+            if (closed) return;
+            closed = true;
+            init.signal?.removeEventListener("abort", abort);
+            controller.enqueue(encoder.encode(frame(events[3])));
+            controller.close();
+          } });
+        } }), { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(events.map(frame).join(""), { headers: { "content-type": "text/event-stream" } });
     }
     throw new Error(`未配置假响应：${method} ${url.pathname}`);
   };
@@ -216,30 +244,27 @@ addCase("row-actions", async (page, open) => {
 addCase("debug-draft", async (page, open) => {
   await open("debug");
   await page.waitForSelector(".debug-body");
-  await page.evaluate(() => {
-    const protocol = document.querySelector(".debug-options select");
-    protocol.value = "messages";
-    protocol.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await choose(page, 'select[aria-label="API 协议"]', "messages");
+  await page.fill('textarea[aria-label="发送消息"]', "manual-prompt");
   await page.fill("input[list=debug-model-options]", "manual-model");
   await page.click(".debug-stream-toggle input");
   const raw = '{"model":"manual-model","messages":[{"role":"user","content":"manual-prompt"}],"temperature":0.1}';
+  await page.click(".debug-system summary");
   await page.fill(".debug-body", raw);
   await page.waitFor(() => window.__test.holds.some((item) => item.path === "templates"));
   await page.evaluate(() => window.__test.holds.find((item) => item.path === "templates").release());
-  await page.waitFor(() => document.querySelector(".debug-options").textContent.includes("server-template"));
+  await page.waitFor(() => document.querySelector(".debug-template").textContent.includes("server-template"));
   assert.deepEqual(await page.evaluate(() => ({
     body: document.querySelector(".debug-body").value,
-    protocol: document.querySelector(".debug-options select").value,
+    protocol: document.querySelector('select[aria-label="API 协议"]').value,
     model: document.querySelector("input[list=debug-model-options]").value,
     stream: document.querySelector(".debug-stream-toggle input").checked,
   })), { body: raw, protocol: "messages", model: "manual-model", stream: false });
+  assert.equal(await page.evaluate(() => document.querySelector('textarea[aria-label="发送消息"]').value), "manual-prompt");
 
-  await open("debug");
-  await page.waitFor(() => window.__test.holds.some((item) => item.path === "templates"));
-  await page.evaluate(() => window.__test.holds.find((item) => item.path === "templates").release());
-  await page.waitFor(() => document.querySelector(".debug-body")?.value.includes("server-prompt"));
-  assert.equal(await page.evaluate(() => JSON.parse(document.querySelector(".debug-body").value).input), "server-prompt");
+  await page.reload();
+  await page.waitForSelector(".debug-body");
+  assert.equal(await page.evaluate(() => document.querySelector(".debug-body").value), raw, "刷新恢复本机草稿");
 });
 
 addCase("settings-load", async (page, open) => {
@@ -431,9 +456,14 @@ addCase("list-save", async (page, open) => {
 addCase("channel-selection", async (page, open) => {
   for (const view of ["debug", "images"]) {
     await open(view);
+    if (view === "debug") {
+      await page.waitForSelector('select[aria-label="发送方式"]');
+      await choose(page, 'select[aria-label="发送方式"]', "direct");
+    }
     await page.waitFor(() => document.querySelectorAll(".debug-channel input").length === 2);
     await page.evaluate(() => [...document.querySelectorAll(".debug-channel input")].forEach((input) => input.click()));
     const draft = '{"model":"manual-model","prompt":"keep-draft","temperature":0.2}';
+    if (view === "debug") await page.click(".debug-system summary");
     await page.fill(".debug-body", draft);
     await page.click(".topbar-nav [data-view=groups]");
     await page.waitForSelector("section[data-view=groups] tbody");
@@ -490,7 +520,8 @@ addCase("lazy-pages", async (page, open) => {
   await page.waitForSelector("section[data-view=debug] .debug-body");
   await page.waitFor(() => window.__test.holds.some((item) => item.path === "templates"));
   await page.evaluate(() => window.__test.holds.find((item) => item.path === "templates").release());
-  await page.waitFor(() => document.querySelector(".debug-body")?.value.includes("server-prompt"));
+  await page.waitFor(() => document.querySelector(".debug-template").textContent.includes("server-template"));
+  await page.click(".debug-system summary");
   await page.fill(".debug-body", '{"model":"keep-state","messages":[],"temperature":0.25}');
   const draft = await page.evaluate(() => document.querySelector(".debug-body").value);
   await page.click(".topbar-nav [data-view=logs]");
@@ -583,6 +614,8 @@ addCase("logs-gap", async (page, open) => {
   assert.deepEqual(await page.evaluate(() => window.__test.errors), []);
 });
 
+addDebugCases(addCase);
+
 // 后续状态用例。
 
 async function main() {
@@ -592,7 +625,8 @@ async function main() {
   const server = createServer((request, response) => {
     const path = new URL(request.url, "http://localhost").pathname;
     const relative = path.startsWith("/console/assets/") ? `web/dist/${path.slice(9)}`
-      : path.startsWith("/static/") ? path.slice(1) : "web/dist/index.html";
+      : path.startsWith("/theme-packs/") ? `themes/${path.slice(13)}`
+        : path.startsWith("/static/") ? path.slice(1) : "web/dist/index.html";
     const file = resolve(ROOT, relative);
     if (!file.startsWith(ROOT)) { response.writeHead(403).end(); return; }
     try {
