@@ -313,7 +313,7 @@ func boolToInt64(value bool) int64 {
 	return 0
 }
 
-// CreateUpstream creates a channel or replaces an archived namesake in place.
+// CreateUpstream creates a channel or replaces an existing namesake in place.
 // Configuration, keys and groups all come from input. A missing timeout stores
 // 0, so requests follow the service default when they run.
 func CreateUpstream(ctx context.Context, db *sql.DB, input *models.UpstreamIn) (models.UpstreamOut, error) {
@@ -350,15 +350,11 @@ func CreateUpstream(ctx context.Context, db *sql.DB, input *models.UpstreamIn) (
             extra_headers = excluded.extra_headers, timeout_seconds = excluded.timeout_seconds,
             rate_limit = excluded.rate_limit, archived = 0, archived_prev_enabled = NULL,
             updated_at = excluded.updated_at
-        WHERE upstreams.archived = 1
         RETURNING id`,
 		input.Name, input.BaseURL, encoded.Names, encoded.Prefixes,
 		encoded.ModelMappings, encoded.EffortMappings, input.Priority, input.Weight,
 		boolToInt64(input.AutoWeightEnabled), boolToInt64(input.Enabled),
 		encoded.Headers, timeout, rateLimit).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return models.UpstreamOut{}, apperr.BadRequest("upstream name already exists")
-	}
 	if err != nil {
 		return models.UpstreamOut{}, apperr.Database(err)
 	}

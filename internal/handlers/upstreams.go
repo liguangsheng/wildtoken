@@ -674,7 +674,7 @@ func AdminGetUpstream(state *appstate.State) http.HandlerFunc {
 	}
 }
 
-// AdminCreateUpstream adds a channel.
+// AdminCreateUpstream adds a channel or overwrites one with the same name.
 func AdminCreateUpstream(state *appstate.State) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		input := models.DefaultUpstreamIn()
@@ -694,10 +694,6 @@ func AdminCreateUpstream(state *appstate.State) http.HandlerFunc {
 
 		created, err := db.CreateUpstream(r.Context(), state.DB, &input)
 		if err != nil {
-			if isUniqueViolation(err) {
-				apperr.WriteError(w, apperr.BadRequest("upstream name already exists"))
-				return
-			}
 			apperr.WriteError(w, err)
 			return
 		}
@@ -762,7 +758,7 @@ func AdminUpdateUpstream(state *appstate.State) http.HandlerFunc {
 
 		updated, err := db.UpdateUpstream(r.Context(), state.DB, id, &input)
 		if err != nil {
-			// A rename onto another channel's name, answered as creation does.
+			// A rename onto another channel's name conflicts with that channel.
 			if isUniqueViolation(err) {
 				apperr.WriteError(w, apperr.BadRequest("upstream name already exists"))
 				return

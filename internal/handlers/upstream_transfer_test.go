@@ -120,8 +120,7 @@ func TestAnExportWithoutKeysLeavesCredentialHeadersOut(t *testing.T) {
 	}
 }
 
-// A rename onto a taken name is the operator's mistake, answered as creation
-// answers it, not as a server failure.
+// A rename onto a taken name conflicts with another channel.
 func TestRenamingOntoATakenNameIsABadRequest(t *testing.T) {
 	state := upstreamTestState(t)
 	createChannel(t, state, "first", "https://api.example.com", 100, nil)

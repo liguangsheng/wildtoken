@@ -73,6 +73,8 @@ wildtokenctl upstreams test-model 7 --file probe.json --yes --timeout 5m
 因此修改名称或优先级不会顺带清空 Key、分组、有效期和限额。`settings update` 沿用服务端 revision 检查。
 其他记录没有版本锁，不要并发编辑同一记录。
 
+`upstreams create` 遇到同名渠道会直接覆盖，保留渠道 ID 和历史日志关联；配置、Key 和分组以本次输入及创建默认值为准，默认解除归档。
+
 `keys` 仍是全量替换字段：显式提交空数组会清空全部 Key。服务端的校验与权限不因 CLI 改变。
 其他创建、模板、调试和探测命令使用管理 API 的请求形状，可从 `help` 和 [skill 命令参考](../skills/wildtoken/references/commands.md) 查看入口。
 

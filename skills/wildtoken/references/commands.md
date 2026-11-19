@@ -50,6 +50,8 @@ wildtokenctl logs snapshot 123 upstream_response --out /private/path/response.js
 
 `upstreams/tokens/groups/settings update` 接受局部 JSON：先读取当前记录，仅投影可写字段，再合并补丁。`settings update` 保留 revision 检查；其他记录没有服务端版本锁，避免并发编辑同一记录。
 
+`upstreams create` 遇到同名渠道会直接覆盖，保留渠道 ID 和历史日志关联；配置、Key 和分组以本次输入及创建默认值为准，默认解除归档。
+
 ```sh
 wildtokenctl upstreams update 7 --data '{"priority":200}' --dry-run
 wildtokenctl upstreams update 7 --data '{"priority":200}' --yes
