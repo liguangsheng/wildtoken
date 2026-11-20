@@ -727,6 +727,68 @@ func TestPrepareRequestLeavesBothEffortsUnsetWhenTheRequestNamesNone(t *testing.
 	}
 }
 
+func TestPrepareRequestSnapshotsKeepDownstreamAndUpstreamHeadersSeparate(t *testing.T) {
+	downstream := http.Header{}
+	downstream.Set("host", "gateway.example.test")
+	downstream.Set("user-agent", "client-agent")
+	downstream.Set("x-request-id", "client-request")
+	downstream.Set("authorization", "Bearer downstream-secret")
+	key := "upstream-secret"
+	upstream := models.UpstreamRow{
+		ID: 1, Name: "channel", BaseURL: "https://api.example.test",
+		APIKey: &key, ExtraHeaders: `{"User-Agent":"channel-agent","X-Request-Id":"channel-request"}`,
+	}
+	requestBody := []byte(`{"model":"m"}`)
+	prepared, err := PrepareRequestWithDownstreamTarget(downstream, &upstream, http.MethodPost,
+		"/v1/responses?upstream=channel&trace=123", "responses", "trace=123", nil,
+		requestBody, 4096)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	var downstreamSnapshot, upstreamSnapshot struct {
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+	}
+	if err := json.Unmarshal(prepared.DownstreamSnapshot.JSON(), &downstreamSnapshot); err != nil {
+		t.Fatalf("decode downstream snapshot: %v", err)
+	}
+	if err := json.Unmarshal(prepared.UpstreamSnapshot.JSON(), &upstreamSnapshot); err != nil {
+		t.Fatalf("decode upstream snapshot: %v", err)
+	}
+
+	if downstreamSnapshot.URL != "/v1/responses?upstream=channel&trace=123" {
+		t.Errorf("downstream URL = %q, want original request target", downstreamSnapshot.URL)
+	}
+	for name, want := range map[string]string{
+		"host":          "gateway.example.test",
+		"user-agent":    "client-agent",
+		"x-request-id":  "client-request",
+		"authorization": "***REDACTED***",
+	} {
+		if got := downstreamSnapshot.Headers[name]; got != want {
+			t.Errorf("downstream %s = %q, want %q", name, got, want)
+		}
+	}
+	if _, present := downstreamSnapshot.Headers["accept-encoding"]; present {
+		t.Error("downstream snapshot contains a gateway-generated header")
+	}
+
+	if upstreamSnapshot.URL != "https://api.example.test/v1/responses?trace=123" {
+		t.Errorf("upstream URL = %q, want forwarded upstream URL", upstreamSnapshot.URL)
+	}
+	for name, want := range map[string]string{
+		"user-agent":      "channel-agent",
+		"x-request-id":    "channel-request",
+		"authorization":   "***REDACTED***",
+		"accept-encoding": "identity",
+	} {
+		if got := upstreamSnapshot.Headers[name]; got != want {
+			t.Errorf("upstream %s = %q, want %q", name, got, want)
+		}
+	}
+}
+
 // A generated image and its usage share one event. A large image pushed the
 // line past the buffer and the usage was discarded with it.
 func TestTheUsageOfAnOversizedEventIsStillRead(t *testing.T) {

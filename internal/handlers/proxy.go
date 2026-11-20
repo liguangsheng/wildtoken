@@ -710,8 +710,15 @@ func runProxyAttempts(r *http.Request, state *appstate.State,
 			// over. Ending the request here refused it with healthy channels
 			// left, and told the caller the channel's name.
 			var err error
-			prepared, err = proxy.PrepareRequest(r.Header, &upstream, r.Method,
-				config.path, config.query, selected.ForwardModel, config.body, logBodyMaxBytes)
+			downstreamHeaders := r.Header.Clone()
+			// net/http stores Host separately from Header. Include the actual
+			// downstream authority in the original-request snapshot.
+			if r.Host != "" {
+				downstreamHeaders.Set("host", r.Host)
+			}
+			prepared, err = proxy.PrepareRequestWithDownstreamTarget(downstreamHeaders,
+				&upstream, r.Method, r.URL.RequestURI(), config.path, config.query,
+				selected.ForwardModel, config.body, logBodyMaxBytes)
 			if err != nil {
 				state.AutoWeight.RecordFailure(selected.Upstream.ID,
 					selected.Upstream.AutoWeightEnabled == 1, config.policy)

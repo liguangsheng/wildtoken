@@ -349,6 +349,21 @@ type PreparedRequest struct {
 func PrepareRequest(downstreamHeaders http.Header, upstream *models.UpstreamRow,
 	method, path, queryParams string, forwardModel *string, body []byte,
 	logBodyMaxBytes int) (*PreparedRequest, error) {
+	target := "/v1/" + strings.TrimLeft(path, "/")
+	if queryParams != "" {
+		target += "?" + queryParams
+	}
+	return PrepareRequestWithDownstreamTarget(downstreamHeaders, upstream, method, target,
+		path, queryParams, forwardModel, body, logBodyMaxBytes)
+}
+
+// PrepareRequestWithDownstreamTarget prepares the upstream request while
+// retaining the original downstream request target for its own snapshot.
+// DownstreamTarget should be the incoming URL's RequestURI, before gateway-only
+// query parameters are removed or the selected upstream base URL is applied.
+func PrepareRequestWithDownstreamTarget(downstreamHeaders http.Header, upstream *models.UpstreamRow,
+	method, downstreamTarget, path, queryParams string, forwardModel *string, body []byte,
+	logBodyMaxBytes int) (*PreparedRequest, error) {
 	url := BuildUpstreamURL(upstream, path, queryParams)
 	forwardHeaders, err := BuildForwardHeaders(downstreamHeaders, upstream, path)
 	if err != nil {
@@ -383,7 +398,7 @@ func PrepareRequest(downstreamHeaders http.Header, upstream *models.UpstreamRow,
 		UpstreamBody:            upstreamBody,
 		ReasoningEffort:         requestEffort,
 		UpstreamReasoningEffort: upstreamEffort,
-		DownstreamSnapshot: SnapshotRequest(method, url, forwardHeaders, body,
+		DownstreamSnapshot: SnapshotRequest(method, downstreamTarget, flattenHeaders(downstreamHeaders), body,
 			logBodyMaxBytes),
 		UpstreamSnapshot: SnapshotRequest(method, url, forwardHeaders, upstreamBody,
 			logBodyMaxBytes),
