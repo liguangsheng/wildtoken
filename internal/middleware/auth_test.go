@@ -66,6 +66,37 @@ func TestFallsBackToUserAgentAndPreservesOtherClientTypes(t *testing.T) {
 	}
 }
 
+func TestRecognizesZcodeAndQoderOnEitherProtocol(t *testing.T) {
+	for _, client := range []struct {
+		name      string
+		userAgent string
+	}{
+		{name: "zcode", userAgent: "Zcode/1.2.3"},
+		{name: "qoder", userAgent: "Qoder/0.9.1"},
+	} {
+		t.Run(client.name, func(t *testing.T) {
+			for _, anthropic := range []bool{false, true} {
+				request := requestWithHeaders(map[string]string{
+					"user-agent":        client.userAgent,
+					"anthropic-version": "2023-06-01",
+				})
+				if got := DetectClientType(request, anthropic); got != client.name {
+					t.Errorf("Anthropic=%v, client type = %q, want %q", anthropic, got, client.name)
+				}
+			}
+		})
+	}
+}
+
+func TestRecognizesZcodeAndQoderFromOriginator(t *testing.T) {
+	for _, client := range []string{"zcode", "qoder"} {
+		request := requestWithHeaders(map[string]string{"originator": client})
+		if got := DetectClientType(request, false); got != client {
+			t.Errorf("originator %q gave %q, want %q", client, got, client)
+		}
+	}
+}
+
 func TestRecognizesPiFromItsUserAgent(t *testing.T) {
 	// The first is the shape observed in production; the rest guard the
 	// prefixes the matcher also accepts.

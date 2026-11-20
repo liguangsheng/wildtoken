@@ -400,6 +400,10 @@ func DetectClientType(r *http.Request, anthropic bool) string {
 		return "codex-tui"
 	case strings.Contains(userAgent, "opencode"):
 		return "opencode"
+	case strings.Contains(originator, "zcode") || strings.Contains(userAgent, "zcode"):
+		return "zcode"
+	case strings.Contains(originator, "qoder") || strings.Contains(userAgent, "qoder"):
+		return "qoder"
 	// Ahead of the Anthropic branch, which keys on the path and the
 	// anthropic-version header rather than on who sent the request: pi speaking
 	// the Messages API is still pi, and was being filed as claude.
