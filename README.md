@@ -192,7 +192,7 @@ then run on a Mac of the target architecture:
 ```bash
 npm --prefix web ci
 npm --prefix web run build
-scripts/package-macos.sh 0.2.5 arm64 /tmp/wildtoken-release  # amd64 for Intel
+scripts/package-macos.sh 0.2.6 arm64 /tmp/wildtoken-release  # amd64 for Intel
 scripts/smoke-macos.sh /tmp/wildtoken-release/*-app.zip
 ```
 
@@ -206,7 +206,7 @@ settings, prompt templates, logs and models, with JSON/NDJSON output.
 With Go 1.25+, install the client and shared skill without cloning the repository:
 
 ```sh
-go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.5
+go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.6
 wildtokenctl skill install --apply --yes
 ```
 

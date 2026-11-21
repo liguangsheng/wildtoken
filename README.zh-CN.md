@@ -144,7 +144,7 @@ macOS 12 或更新版本可使用 `wildtoken-v<版本>-macos-aarch64-app.zip`（
 ```bash
 npm --prefix web ci
 npm --prefix web run build
-scripts/package-macos.sh 0.2.5 arm64 /tmp/wildtoken-release  # Intel 使用 amd64
+scripts/package-macos.sh 0.2.6 arm64 /tmp/wildtoken-release  # Intel 使用 amd64
 scripts/smoke-macos.sh /tmp/wildtoken-release/*-app.zip
 ```
 
@@ -156,7 +156,7 @@ scripts/smoke-macos.sh /tmp/wildtoken-release/*-app.zip
 有 Go 1.25+ 时，无需克隆仓库即可安装客户端和共享 skill：
 
 ```sh
-go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.5
+go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.6
 wildtokenctl skill install --apply --yes
 ```
 

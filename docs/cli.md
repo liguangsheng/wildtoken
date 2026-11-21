@@ -10,7 +10,7 @@ macOS 应用内的客户端位于 `WildToken.app/Contents/MacOS/wildtokenctl`。
 有 Go 1.25+ 时可直接安装固定版本，再安装 Pi/OpenCode 共用的 skill：
 
 ```sh
-go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.5
+go install github.com/liguangsheng/wildtoken/cmd/wildtokenctl@v0.2.6
 wildtokenctl skill install --apply --yes
 ```
 
