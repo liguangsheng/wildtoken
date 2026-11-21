@@ -103,6 +103,18 @@ test("pre-paint boot clears the Ark root contract for other themes", () => {
   assert.equal(attributes.get("data-ark-depth"), undefined);
 });
 
+test("pre-paint boot falls back when a stored theme pack has been removed", () => {
+  for (const theme of ["sakura-mist", "anthropic", "anthropic-dark"]) {
+    const { attributes, context, storedValues } = createThemeContext(theme);
+    storedValues.set("wildtoken_theme_css_id", theme);
+    storedValues.set("wildtoken_theme_css", `/theme-packs/${theme}/theme.css`);
+    vm.runInContext(prePaintScript(), context, { filename: "console-prepaint.js" });
+
+    assert.equal(attributes.get("data-theme"), "dark", `${theme} should fall back to dark`);
+    assert.equal(attributes.get("data-theme-pack-css"), undefined, `${theme} CSS should not load`);
+  }
+});
+
 /* 主操作只认显式的 .primary（5639f9c）。以前是「所有按钮刷成主操作，再用
    button:not(:where(...)) 白名单把导航、排序、分段控件摘出来」，漏登记一项就
    多一块实心色块。现在不该再有那种全局规则。 */

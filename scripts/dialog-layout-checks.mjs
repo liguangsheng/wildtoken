@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const THEMES = ["dark", "light", "anthropic", "anthropic-dark", "sakura-mist", "ark", "endfield", "gojo"];
+const THEMES = ["dark", "light", "ark", "endfield", "gojo"];
 const VIEWPORTS = [
   { width: 1440, height: 900, mobile: false },
   { width: 390, height: 844, mobile: true },

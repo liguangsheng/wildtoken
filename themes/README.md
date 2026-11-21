@@ -93,13 +93,7 @@ html[data-theme="soul-society"] .topbar {
 }
 ```
 
-只改变量能走多远，看 `sakura-mist/`（粉色面 + 灰紫强调）和 `anthropic/`、
-`anthropic-dark/`（暖象牙／暖石板纸面，单一陶土强调色）就知道了：这三个基本是纯变量
-表，之后只补了三条结构规则——关掉 `.aurora` 光晕、把顶栏那条青色渐变细线换成自己的
-颜色、让 `.log-rate-pill` 那几颗药丸改用 `--accent-soft` 平铺。两个 `anthropic*` 多一条，把
-`.topbar-brand h1` 和 `.panel h2` 换成衬线字体，其余全交给基础样式。
-
-想改得更彻底可以参考 `ark/`（工业信息风，青色只用来标选中、焦点、进度和主操作）、
+要自定义导航和页面布局，可以参考 `ark/`（工业信息风，青色只用来标选中、焦点、进度和主操作）、
 `endfield/`（工程现场风，浅工作面 + 信号黄）和 `gojo/`（角色主题，用
 `.view[data-view="…"]` 逐视图换一个 `--gojo-view-mark` 汉字水印，由
 `.view > .panel::after` 统一渲染）。三者都把横向顶栏改成了左侧竖排导航栏，在变量之外

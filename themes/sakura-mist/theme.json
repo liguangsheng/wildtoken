@@ -1,8 +1,0 @@
-{
-  "id": "sakura-mist",
-  "label": "樱雾灰紫",
-  "css": "theme.css",
-  "swatch": ["#ffe3ee", "#535369"],
-  "version": "1.0.0",
-  "description": "Soft pink surfaces with restrained gray-violet accents."
-}

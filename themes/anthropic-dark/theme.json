@@ -1,8 +1,0 @@
-{
-  "id": "anthropic-dark",
-  "label": "Anthropic Dark",
-  "css": "theme.css",
-  "swatch": ["#141413", "#d97757"],
-  "version": "1.0.0",
-  "description": "Warm slate surfaces with ivory ink, a single clay accent, and serif display type."
-}

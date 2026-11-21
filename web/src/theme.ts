@@ -11,9 +11,6 @@ export const THEME_CSS_ID_KEY = "wildtoken_theme_css_id";
 export const THEME_PACKS: Record<string, string> = {
   ark: "/theme-packs/ark/theme.css",
   endfield: "/theme-packs/endfield/theme.css",
-  "sakura-mist": "/theme-packs/sakura-mist/theme.css",
-  anthropic: "/theme-packs/anthropic/theme.css",
-  "anthropic-dark": "/theme-packs/anthropic-dark/theme.css",
   gojo: "/theme-packs/gojo/theme.css",
 };
 
@@ -25,9 +22,6 @@ export const THEME_LABELS: Record<string, string> = {
   light: "浅色",
   ark: "Ark",
   endfield: "Endfield",
-  "sakura-mist": "Sakura Mist",
-  anthropic: "Anthropic",
-  "anthropic-dark": "Anthropic Dark",
   gojo: "Gojo",
 };
 
@@ -37,9 +31,6 @@ export const THEME_SWATCHES: Record<string, [string, string]> = {
   light: ["#f4f6fb", "#0891b2"],
   ark: ["#080a0b", "#18d1ff"],
   endfield: ["#f2f2f0", "#fffa00"],
-  "sakura-mist": ["#ffe3ee", "#535369"],
-  anthropic: ["#faf9f5", "#d97757"],
-  "anthropic-dark": ["#141413", "#d97757"],
   gojo: ["#070910", "#63dcff"],
 };
 

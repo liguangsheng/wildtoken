@@ -363,7 +363,7 @@ export function addDebugCases(addCase) {
       window.dispatchEvent(new CustomEvent("console:appearance"));
     }, theme);
     const viewport = (width) => page.cdp.send("Emulation.setDeviceMetricsOverride", { width, height: width < 600 ? 844 : 900, deviceScaleFactor: 1, mobile: false });
-    for (const theme of ["dark", "light", "anthropic", "anthropic-dark", "ark", "endfield", "sakura-mist", "gojo"]) {
+    for (const theme of ["dark", "light", "ark", "endfield", "gojo"]) {
       await applyTheme(theme);
       for (const width of [1600, 1280, 1024, 820, 390, 320]) {
         await viewport(width);
@@ -412,7 +412,7 @@ export function addDebugCases(addCase) {
           }));
           assert(bars.top >= bars.header && bars.send <= bars.nav, `手机聊天控件被遮挡：${JSON.stringify(bars)}`);
         }
-        if ((theme === "dark" && width === 1600) || (theme === "light" && width === 390) || (theme === "anthropic" && width === 1024)) await capture(`chat-${theme}-${width}`);
+        if ((theme === "dark" && width === 1600) || (theme === "light" && width === 390) || (theme === "endfield" && width === 1024)) await capture(`chat-${theme}-${width}`);
       }
     }
     await viewport(1600);
