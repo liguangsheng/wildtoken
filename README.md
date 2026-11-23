@@ -479,6 +479,10 @@ no body lists any more are then collected. Up to 100,000 logs can keep their
 bodies, at up to 128 MiB per body. SQLite incremental vacuum returns the freed
 pages to the filesystem.
 
+Go runtime profiles are available under `/api/admin/debug/pprof/` and require
+the admin token in `x-admin-token`. The index lists heap, goroutine, mutex and
+other profiles; CPU and execution trace captures use `/profile` and `/trace`.
+
 ## 💾 Backup and Restore
 
 WildToken backs the database up every day at 05:00 local time and keeps the

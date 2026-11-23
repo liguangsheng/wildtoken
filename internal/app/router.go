@@ -81,6 +81,7 @@ func mountAdminRoutes(router chi.Router, state *appstate.State) {
 		admin.Post("/debug", handlers.AdminDebugRoute(state))
 		admin.Get("/system", handlers.AdminSystemInfo(state))
 		admin.Get("/system/metrics", handlers.AdminRuntimeMetrics(state))
+		admin.Mount("/debug/pprof", adminPprofHandler())
 
 		admin.Route("/upstreams", func(upstreams chi.Router) {
 			upstreams.Post("/fetch-models", handlers.AdminFetchModelsPreview(state))
