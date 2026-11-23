@@ -121,22 +121,27 @@ func BuildUpstreamURL(upstream *models.UpstreamRow, path, queryParams string) st
 // the nested reasoning.effort (Responses API style), and the nested
 // output_config.effort (Anthropic Messages API style).
 func ExtractReasoningEffort(body []byte) *string {
-	var request jsonValue
-	if err := json.Unmarshal(body, &request); err != nil {
+	members, _, ok := objectMembers(body)
+	if !ok || !jsonNumbersFitFloat64(body) {
 		return nil
 	}
+	return reasoningEffort(body, members)
+}
 
-	if effort, ok := formatEffort(request["reasoning_effort"]); ok {
-		return &effort
+func mappedReasoningEffort(requestEffort *string, mappings map[string]string,
+	preparedBody []byte) *string {
+	if requestEffort == nil {
+		return nil
 	}
-	for _, keys := range [][]string{{"reasoning", "effort"}, {"output_config", "effort"}} {
-		if text, ok := valueAt(request, keys...).(string); ok {
-			if trimmed := strings.TrimSpace(text); trimmed != "" {
-				return &trimmed
-			}
-		}
+	mapped, ok := mappings[strings.ToLower(*requestEffort)]
+	if !ok || mapped == *requestEffort {
+		return requestEffort
 	}
-	return nil
+	mapped = strings.TrimSpace(mapped)
+	if mapped == "" {
+		return ExtractReasoningEffort(preparedBody)
+	}
+	return &mapped
 }
 
 // EffortMappingsFromRow decodes a channel's stored reasoning-effort rewrites.
@@ -303,7 +308,11 @@ func PrepareUpstreamBody(body []byte, forwardModel *string, path string,
 	if !ok {
 		return body
 	}
+	return prepareJSONUpstreamBody(body, members, closing, forwardModel, path, effortMappings)
+}
 
+func prepareJSONUpstreamBody(body []byte, members []member, closing int,
+	forwardModel *string, path string, effortMappings map[string]string) []byte {
 	edits := effortEdits(body, members, effortMappings)
 	if forwardModel != nil {
 		edits = append(edits, modelEdits(body, members, *forwardModel)...)
@@ -364,6 +373,19 @@ func PrepareRequest(downstreamHeaders http.Header, upstream *models.UpstreamRow,
 func PrepareRequestWithDownstreamTarget(downstreamHeaders http.Header, upstream *models.UpstreamRow,
 	method, downstreamTarget, path, queryParams string, forwardModel *string, body []byte,
 	logBodyMaxBytes int) (*PreparedRequest, error) {
+	parsedBody, err := ParseRequestBody(downstreamHeaders, body)
+	if err != nil {
+		return nil, err
+	}
+	return PrepareRequestWithParsedBody(downstreamHeaders, upstream, method, downstreamTarget,
+		path, queryParams, forwardModel, parsedBody, logBodyMaxBytes)
+}
+
+// PrepareRequestWithParsedBody reuses request metadata parsed at the HTTP
+// boundary, including raw member offsets used by upstream rewriting.
+func PrepareRequestWithParsedBody(downstreamHeaders http.Header, upstream *models.UpstreamRow,
+	method, downstreamTarget, path, queryParams string, forwardModel *string, body *RequestBody,
+	logBodyMaxBytes int) (*PreparedRequest, error) {
 	url := BuildUpstreamURL(upstream, path, queryParams)
 	forwardHeaders, err := BuildForwardHeaders(downstreamHeaders, upstream, path)
 	if err != nil {
@@ -371,25 +393,13 @@ func PrepareRequestWithDownstreamTarget(downstreamHeaders http.Header, upstream 
 	}
 
 	effortMappings := EffortMappingsFromRow(upstream.EffortMappings)
-	upstreamBody, err := prepareRequestBody(downstreamHeaders, body, forwardModel, path, effortMappings)
+	upstreamBody, err := body.Prepare(forwardModel, path, effortMappings)
 	if err != nil {
 		return nil, err
 	}
 
-	// Both efforts are logged: the one the caller asked for, and the one the
-	// upstream was actually sent. Without the second, a channel that rewrites
-	// "max" into "xhigh" leaves a log saying the request ran at "max", which is
-	// the one thing that did not happen.
-	//
-	// The upstream value is re-read from the prepared body rather than inferred
-	// from the mapping table, so it reports what was really sent. That read is
-	// skipped when the channel maps nothing, because then nothing rewrote the
-	// effort and the two are the same string.
-	requestEffort := ExtractReasoningEffort(body)
-	upstreamEffort := requestEffort
-	if len(effortMappings) > 0 {
-		upstreamEffort = ExtractReasoningEffort(upstreamBody)
-	}
+	requestEffort := body.ReasoningEffort()
+	upstreamEffort := mappedReasoningEffort(requestEffort, effortMappings, upstreamBody)
 
 	return &PreparedRequest{
 		Path:                    path,
@@ -398,7 +408,7 @@ func PrepareRequestWithDownstreamTarget(downstreamHeaders http.Header, upstream 
 		UpstreamBody:            upstreamBody,
 		ReasoningEffort:         requestEffort,
 		UpstreamReasoningEffort: upstreamEffort,
-		DownstreamSnapshot: SnapshotRequest(method, downstreamTarget, flattenHeaders(downstreamHeaders), body,
+		DownstreamSnapshot: SnapshotRequest(method, downstreamTarget, flattenHeaders(downstreamHeaders), body.raw,
 			logBodyMaxBytes),
 		UpstreamSnapshot: SnapshotRequest(method, url, forwardHeaders, upstreamBody,
 			logBodyMaxBytes),

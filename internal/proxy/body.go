@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -27,22 +26,14 @@ func requestBoundary(headers http.Header) (string, bool, error) {
 
 // RequestModel reads JSON and multipart through the same routing boundary.
 func RequestModel(headers http.Header, body []byte) (*string, error) {
-	boundary, multipartBody, err := requestBoundary(headers)
+	parsed, err := ParseRequestBody(headers, body)
 	if err != nil {
 		return nil, err
 	}
-	if !multipartBody {
-		var request map[string]any
-		if json.Unmarshal(body, &request) != nil {
-			return nil, nil
-		}
-		model, _ := request["model"].(string)
-		if model == "" {
-			return nil, nil
-		}
-		return &model, nil
-	}
+	return parsed.Model(), nil
+}
 
+func multipartRequestModel(boundary string, body []byte) (*string, error) {
 	reader := multipart.NewReader(bytes.NewReader(body), boundary)
 	var model *string
 	for parts := 0; ; parts++ {
@@ -77,13 +68,15 @@ func RequestModel(headers http.Header, body []byte) (*string, error) {
 
 func prepareRequestBody(headers http.Header, body []byte, forwardModel *string,
 	path string, mappings map[string]string) ([]byte, error) {
-	boundary, multipartBody, err := requestBoundary(headers)
+	parsed, err := ParseRequestBody(headers, body)
 	if err != nil {
 		return nil, err
 	}
-	if !multipartBody {
-		return PrepareUpstreamBody(body, forwardModel, path, mappings), nil
-	}
+	return parsed.Prepare(forwardModel, path, mappings)
+}
+
+func rewriteMultipartRequestBody(boundary string, body []byte,
+	forwardModel *string) ([]byte, error) {
 	if forwardModel == nil {
 		return body, nil
 	}

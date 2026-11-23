@@ -166,27 +166,6 @@ func HasVisibleToken(chunk []byte) bool {
 	return visible
 }
 
-func sseLineHasVisibleToken(line string) bool {
-	data, ok := sseData(line)
-	if !ok || data == "" || data == "[DONE]" {
-		return false
-	}
-	var payload jsonValue
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return false
-	}
-	return jsonHasVisibleToken(payload)
-}
-
-// sseData returns the payload of a `data:` line.
-func sseData(line string) (string, bool) {
-	rest, found := strings.CutPrefix(strings.TrimSpace(line), "data:")
-	if !found {
-		return "", false
-	}
-	return strings.TrimLeft(rest, " \t"), true
-}
-
 // usageInt32 reads a numeric usage field, which JSON decoding gives as float64.
 //
 // A figure that will not fit is reported as absent rather than as a substitute.
@@ -511,7 +490,16 @@ func IsSSEContentType(contentType string) bool {
 }
 
 func sseBytesLineHasVisibleToken(line []byte) bool {
-	return sseLineHasVisibleToken(string(bytes.TrimSuffix(line, []byte("\r"))))
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	data, ok := sseDataBytes(line)
+	if !ok || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+		return false
+	}
+	var payload jsonValue
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false
+	}
+	return jsonHasVisibleToken(payload)
 }
 
 func isTerminalSSEEventType(eventType string) bool {
@@ -524,26 +512,28 @@ func isTerminalSSEEventType(eventType string) bool {
 	}
 }
 
+func isTerminalSSEEventLine(line []byte) bool {
+	name, found := bytes.CutPrefix(bytes.TrimSpace(line), []byte("event:"))
+	return found && isTerminalSSEEventType(strings.TrimSpace(string(name)))
+}
+
 // sseBytesLineIsTerminal reports whether a line ends the stream, either as an
 // `event:` name or as the `type` of a data payload.
 func sseBytesLineIsTerminal(line []byte) bool {
-	text := strings.TrimSpace(string(bytes.TrimSuffix(line, []byte("\r"))))
-
-	if name, found := strings.CutPrefix(text, "event:"); found &&
-		isTerminalSSEEventType(strings.TrimSpace(name)) {
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	if isTerminalSSEEventLine(line) {
 		return true
 	}
-
-	data, ok := sseData(text)
+	data, ok := sseDataBytes(line)
 	if !ok {
 		return false
 	}
-	if data == "[DONE]" {
+	if bytes.Equal(data, []byte("[DONE]")) {
 		return true
 	}
 
 	var payload jsonValue
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return false
 	}
 	eventType, _ := payload["type"].(string)
@@ -580,15 +570,8 @@ func (o *sseObservation) tokenUsage() TokenUsage { return o.usage.usage() }
 // observeLine folds one complete line into the observation. elapsedMs reports
 // how long the request has been running, for time-to-first-token.
 func (o *sseObservation) observeLine(line []byte, elapsedMs func() int32) {
-	if o.firstTokenMs == nil && sseBytesLineHasVisibleToken(line) {
-		measured := elapsedMs()
-		o.firstTokenMs = &measured
-	}
-
 	lineWithoutCR := bytes.TrimSuffix(line, []byte("\r"))
 	if len(lineWithoutCR) == 0 {
-		// A blank line closes an event, which is what confirms a pending
-		// terminal event actually arrived in full.
 		if o.terminalEventPending {
 			o.terminalEventSeen = true
 		}
@@ -596,17 +579,33 @@ func (o *sseObservation) observeLine(line []byte, elapsedMs func() int32) {
 		return
 	}
 
-	if !o.terminalEventSeen && sseBytesLineIsTerminal(line) {
+	if !o.terminalEventSeen && isTerminalSSEEventLine(lineWithoutCR) {
 		o.terminalEventPending = true
 	}
 
-	data, ok := sseData(string(lineWithoutCR))
-	if !ok || data == "" || data == "[DONE]" {
+	data, ok := sseDataBytes(lineWithoutCR)
+	if !ok || len(data) == 0 {
 		return
 	}
-	var payload jsonValue
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+	if bytes.Equal(data, []byte("[DONE]")) {
+		if !o.terminalEventSeen {
+			o.terminalEventPending = true
+		}
 		return
+	}
+
+	var payload jsonValue
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	if !o.terminalEventSeen {
+		if eventType, _ := payload["type"].(string); isTerminalSSEEventType(eventType) {
+			o.terminalEventPending = true
+		}
+	}
+	if o.firstTokenMs == nil && jsonHasVisibleToken(payload) {
+		measured := elapsedMs()
+		o.firstTokenMs = &measured
 	}
 	if o.responseID == "" {
 		o.responseID, _ = valueAt(payload, "response", "id").(string)

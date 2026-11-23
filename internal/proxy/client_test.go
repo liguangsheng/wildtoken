@@ -455,6 +455,23 @@ func TestObservationExtractsTerminalMetadataAfterTheSnapshotLimit(t *testing.T) 
 	}
 }
 
+func TestObservationRecognizesTerminalEventNameOnSeparateLine(t *testing.T) {
+	observation := &sseObservation{}
+	measure := func() int32 { return 1 }
+
+	observation.observeChunk([]byte("event: response.completed\r\n"), measure)
+	if !observation.terminalEventPending || observation.terminalEventSeen {
+		t.Fatal("terminal event name was not held pending until its blank line")
+	}
+	observation.observeChunk([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\r\n\r\n"), measure)
+	if !observation.terminalEventSeen {
+		t.Error("terminal event was not completed by the blank line")
+	}
+	if observation.firstTokenMs == nil {
+		t.Error("data payload was not observed for its visible token")
+	}
+}
+
 func TestObservationDiscardsAndRecoversFromAnOversizedEventLine(t *testing.T) {
 	observation := &sseObservation{}
 	measure := func() int32 { return 1 }

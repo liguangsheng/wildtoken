@@ -436,13 +436,14 @@ func proxyHandler(state *appstate.State, admin *middleware.DownstreamAuth) http.
 			return
 		}
 
-		model, err := proxy.RequestModel(r.Header, body)
+		parsedBody, err := proxy.ParseRequestBody(r.Header, body)
 		if err != nil {
 			guard.logAndDisarm(http.StatusBadRequest, err.Error())
 			writeProtocolError(w, http.StatusBadRequest, path, err.Error(), "invalid_request_error")
 			return
 		}
-		route, err := loadResponseRoute(r, state, auth.TokenID, path, body)
+		model := parsedBody.Model()
+		route, err := loadResponseRoute(r, state, auth.TokenID, path, parsedBody)
 		if err != nil {
 			status := int32(http.StatusInternalServerError)
 			var appErr *apperr.AppError
@@ -522,7 +523,7 @@ func proxyHandler(state *appstate.State, admin *middleware.DownstreamAuth) http.
 			groupName:       resolveGroupName(r.Context(), state, auth.GroupID),
 			path:            path,
 			query:           withoutQueryParam(r.URL.RawQuery, "upstream"),
-			body:            body,
+			requestBody:     parsedBody,
 			model:           model,
 			selector:        selector,
 			directSelection: directSelection,
@@ -565,7 +566,7 @@ type proxyAttemptConfig struct {
 	groupName       string
 	path            string
 	query           string // the caller's, minus this gateway's ?upstream= hint
-	body            []byte
+	requestBody     *proxy.RequestBody
 	model           *string
 	selector        *string
 	directSelection *proxy.Selection
@@ -716,9 +717,9 @@ func runProxyAttempts(r *http.Request, state *appstate.State,
 			if r.Host != "" {
 				downstreamHeaders.Set("host", r.Host)
 			}
-			prepared, err = proxy.PrepareRequestWithDownstreamTarget(downstreamHeaders,
+			prepared, err = proxy.PrepareRequestWithParsedBody(downstreamHeaders,
 				&upstream, r.Method, r.URL.RequestURI(), config.path, config.query,
-				selected.ForwardModel, config.body, logBodyMaxBytes)
+				selected.ForwardModel, config.requestBody, logBodyMaxBytes)
 			if err != nil {
 				state.AutoWeight.RecordFailure(selected.Upstream.ID,
 					selected.Upstream.AutoWeightEnabled == 1, config.policy)

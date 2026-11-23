@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,7 +14,7 @@ import (
 	"github.com/liguangsheng/wildtoken/internal/proxy"
 )
 
-func responseReference(path string, body []byte) (string, error) {
+func responseReference(path string, body *proxy.RequestBody) (string, error) {
 	if rest, ok := strings.CutPrefix(path, "responses/"); ok && rest != "compact" {
 		id, _, _ := strings.Cut(rest, "/")
 		if !models.ValidResponseID(id) {
@@ -26,20 +25,18 @@ func responseReference(path string, body []byte) (string, error) {
 	if path != "responses" {
 		return "", nil
 	}
-	var input struct {
-		PreviousResponseID string `json:"previous_response_id"`
-	}
-	if json.Unmarshal(body, &input) != nil || input.PreviousResponseID == "" {
+	id := body.PreviousResponseID()
+	if id == "" {
 		return "", nil
 	}
-	if !models.ValidResponseID(input.PreviousResponseID) {
+	if !models.ValidResponseID(id) {
 		return "", apperr.BadRequest("invalid previous_response_id")
 	}
-	return input.PreviousResponseID, nil
+	return id, nil
 }
 
 func loadResponseRoute(r *http.Request, state *appstate.State, tokenID int64,
-	path string, body []byte) (*models.ResponseRoute, error) {
+	path string, body *proxy.RequestBody) (*models.ResponseRoute, error) {
 	id, err := responseReference(path, body)
 	if err != nil || id == "" {
 		return nil, err
@@ -83,10 +80,7 @@ func rememberResponseRoute(r *http.Request, state *appstate.State, config proxyA
 	if config.auth.TokenID <= 0 || r.Method != http.MethodPost || config.path != "responses" {
 		return nil
 	}
-	var options struct {
-		Store *bool `json:"store"`
-	}
-	if json.Unmarshal(config.body, &options) == nil && options.Store != nil && !*options.Store {
+	if config.requestBody.StoreDisabled() {
 		return nil
 	}
 	route := models.ResponseRoute{
