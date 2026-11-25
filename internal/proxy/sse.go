@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // maxSSEEventBytes bounds one buffered SSE line, so a malformed stream that
@@ -475,13 +478,36 @@ func ExtractUsage(rawBody []byte, contentType string) TokenUsage {
 		return report.usage()
 	}
 
-	var payload jsonValue
-	if err := json.Unmarshal(rawBody, &payload); err == nil {
+	if payload, ok := decodeMembers(rawBody, "usage", "response", "message"); ok {
 		if usage, ok := usageFromValue(payload); ok {
 			return usage
 		}
 	}
 	return TokenUsage{}
+}
+
+// decodeMembers decodes the named members of a JSON object body, keeping the
+// last of each name as json.Unmarshal into a map does, and leaves the rest of
+// the body undecoded: a long completion decoded whole cost several times its
+// size. ok is false wherever that json.Unmarshal would have failed.
+func decodeMembers(body []byte, names ...string) (jsonValue, bool) {
+	members, _, numbersFit, ok := scanObject(body)
+	if !ok || !numbersFit {
+		return nil, false
+	}
+	decoded := jsonValue{}
+	for i := len(members) - 1; i >= 0; i-- {
+		field := members[i]
+		if _, seen := decoded[field.name]; seen || !slices.Contains(names, field.name) {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(body[field.start:field.end], &value); err != nil {
+			return nil, false
+		}
+		decoded[field.name] = value
+	}
+	return decoded, true
 }
 
 // IsSSEContentType reports whether a content type marks a server-sent stream.
@@ -542,8 +568,11 @@ func sseBytesLineIsTerminal(line []byte) bool {
 
 // sseObservation accumulates what a stream reveals as its bytes pass through.
 type sseObservation struct {
-	lineBuf                 []byte
-	lineOverflow            bool
+	lineBuf      []byte
+	lineOverflow bool
+	// lineKind says whether the line being read can matter. Only data: and
+	// event: lines do; any other, like a whole JSON body, is not buffered.
+	lineKind                sseLineKind
 	firstTokenMs            *int32
 	terminalEventPending    bool
 	terminalEventSeen       bool
@@ -645,10 +674,19 @@ func (o *sseObservation) observeChunk(chunk []byte, elapsedMs func() int32) {
 			chunk = nil
 		}
 
+		if o.lineKind == sseLineUndecided && !o.lineOverflow {
+			o.lineKind = classifySSELine(o.lineBuf, segment)
+			if o.lineKind == sseLineIgnored {
+				o.lineBuf = o.lineBuf[:0]
+			}
+		}
+
 		// An oversized line is discarded rather than buffered, and the discard
 		// continues until its terminating newline arrives. Only its tail is
 		// kept, for the usage.
 		switch {
+		case o.lineKind == sseLineIgnored:
+			// Nothing in it is read.
 		case o.lineOverflow:
 			o.keepOverflowTail(segment)
 		case len(o.lineBuf)+len(segment) <= maxSSEEventBytes:
@@ -662,15 +700,50 @@ func (o *sseObservation) observeChunk(chunk []byte, elapsedMs func() int32) {
 		}
 
 		if completeLine {
-			if o.lineOverflow {
+			switch {
+			case o.lineKind == sseLineIgnored:
+			case o.lineOverflow:
 				o.observeOversizedTail()
-			} else {
+			default:
 				o.observeLine(o.lineBuf, elapsedMs)
 			}
 			o.lineBuf = o.lineBuf[:0]
 			o.lineOverflow = false
+			o.lineKind = sseLineUndecided
 		}
 	}
+}
+
+// sseLineKind sorts a line by the bytes it starts with.
+type sseLineKind uint8
+
+const (
+	sseLineUndecided sseLineKind = iota
+	sseLineRead
+	sseLineIgnored
+)
+
+// classifySSELine looks at how a line starts, the bytes buffered so far and
+// then those arriving. Leading space is skipped the way sseDataBytes skips it,
+// so a line is ignored only when observeLine would find nothing in it.
+func classifySSELine(buffered, arriving []byte) sseLineKind {
+	var head [64]byte
+	n := copy(head[:], buffered)
+	n += copy(head[n:], arriving)
+	rest := bytes.TrimLeftFunc(head[:n], unicode.IsSpace)
+	if len(rest) == 0 || (rest[0] >= utf8.RuneSelf && !utf8.FullRune(rest)) {
+		// Only space so far, or a character cut off: wait for more.
+		return sseLineUndecided
+	}
+	for _, field := range [...]string{"data:", "event:"} {
+		if bytes.HasPrefix(rest, []byte(field)) {
+			return sseLineRead
+		}
+		if len(rest) < len(field) && string(rest) == field[:len(rest)] {
+			return sseLineUndecided
+		}
+	}
+	return sseLineIgnored
 }
 
 // overflowTailBytes is how much of an oversized line's end is kept.
@@ -707,13 +780,16 @@ func (o *sseObservation) observeOversizedTail() {
 
 // finish observes a trailing partial line and settles a pending terminal event.
 func (o *sseObservation) finish(elapsedMs func() int32) {
-	if o.lineOverflow {
+	switch {
+	case o.lineKind == sseLineIgnored:
+	case o.lineOverflow:
 		o.observeOversizedTail()
-	} else if len(o.lineBuf) > 0 {
+	case len(o.lineBuf) > 0:
 		o.observeLine(o.lineBuf, elapsedMs)
 	}
 	o.lineBuf = o.lineBuf[:0]
 	o.lineOverflow = false
+	o.lineKind = sseLineUndecided
 
 	if o.terminalEventPending {
 		o.terminalEventSeen = true
@@ -743,8 +819,8 @@ func ExtractResponseReasoningEffort(rawBody []byte, contentType string) *string 
 		return reported
 	}
 
-	var payload jsonValue
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
+	payload, ok := decodeMembers(rawBody, "response", "reasoning")
+	if !ok {
 		return nil
 	}
 	if effort, ok := responseReasoningEffortFromValue(payload); ok {

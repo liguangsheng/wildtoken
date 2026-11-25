@@ -121,8 +121,8 @@ func BuildUpstreamURL(upstream *models.UpstreamRow, path, queryParams string) st
 // the nested reasoning.effort (Responses API style), and the nested
 // output_config.effort (Anthropic Messages API style).
 func ExtractReasoningEffort(body []byte) *string {
-	members, _, ok := objectMembers(body)
-	if !ok || !jsonNumbersFitFloat64(body) {
+	members, _, numbersFit, ok := scanObject(body)
+	if !ok || !numbersFit {
 		return nil
 	}
 	return reasoningEffort(body, members)
@@ -602,7 +602,8 @@ func ProxyRequest(ctx context.Context, deps Deps, policy AutoWeightPolicy,
 		return &Response{Status: status, Headers: responseHeaders, Body: stream}, nil
 	}
 
-	bodyBytes, observation, err := readResponseBody(response.Body, start, attempt.extend)
+	bodyBytes, observation, err := readResponseBody(response.Body, response.ContentLength,
+		start, attempt.extend)
 	response.Body.Close()
 	attempt.stop()
 	if err != nil {
@@ -816,11 +817,20 @@ var ErrUpstreamResponseTooLarge = errors.New("upstream response exceeded the max
 
 // readResponseBody reads a full upstream body while observing it as an SSE
 // stream, for the true time-to-first-token and any error event it carries.
+// size is the declared length, or -1: a declared body is read into one buffer
+// of that size, and one declared over the cap is refused unread.
 //
 // progress is called for each chunk, so the attempt's clock measures silence
 // from the upstream rather than the total time a long body takes to arrive.
-func readResponseBody(body io.Reader, start time.Time, progress func()) ([]byte, *sseObservation, error) {
+func readResponseBody(body io.Reader, size int64, start time.Time,
+	progress func()) ([]byte, *sseObservation, error) {
+	if size > MaxUpstreamResponseBytes {
+		return nil, nil, ErrUpstreamResponseTooLarge
+	}
 	var collected bytes.Buffer
+	if size > 0 {
+		collected.Grow(int(size))
+	}
 	observation := &sseObservation{}
 	measure := func() int32 { return int32(time.Since(start).Milliseconds()) }
 

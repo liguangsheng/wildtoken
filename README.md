@@ -483,6 +483,10 @@ Go runtime profiles are available under `/api/admin/debug/pprof/` and require
 the admin token in `x-admin-token`. The index lists heap, goroutine, mutex and
 other profiles; CPU and execution trace captures use `/profile` and `/trace`.
 
+The gateway runs the Go garbage collector at `GOGC=50` unless `GOGC` is set:
+most of its garbage is request and response bodies, and at Go's default of 100
+the heap grew to about twice the bodies in flight.
+
 ## 💾 Backup and Restore
 
 WildToken backs the database up every day at 05:00 local time and keeps the

@@ -9,12 +9,23 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/liguangsheng/wildtoken/internal/app"
 )
 
+// defaultGCPercent halves Go's default heap headroom. The gateway's garbage is
+// mostly request and response bodies; at 100 the heap held about twice the
+// live bodies, so 8 concurrent 22 MiB uploads peaked at 714 MiB, at 50 at
+// 471 MiB, for the same CPU. 100 concurrent small streams pay about a tenth
+// more GC CPU for a fifth less memory. GOGC in the environment still wins.
+const defaultGCPercent = 50
+
 func main() {
+	if _, set := os.LookupEnv("GOGC"); !set {
+		debug.SetGCPercent(defaultGCPercent)
+	}
 	if handled, code := desktopMain(); handled {
 		os.Exit(code)
 	}

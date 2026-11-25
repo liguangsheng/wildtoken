@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -37,7 +36,7 @@ func ParseRequestBody(headers http.Header, raw []byte) (*RequestBody, error) {
 		return parsed, err
 	}
 
-	members, closing, ok := objectMembers(raw)
+	members, closing, numbersFit, ok := scanObject(raw)
 	if !ok {
 		return parsed, nil
 	}
@@ -46,7 +45,9 @@ func ParseRequestBody(headers http.Header, raw []byte) (*RequestBody, error) {
 	parsed.closing = closing
 	parsed.previousResponseID = previousResponseID(raw, members)
 	parsed.storeDisabled = storeDisabled(raw, members)
-	if !jsonNumbersFitFloat64(raw) {
+	// map[string]any decoding failed on such a body, and routing read
+	// neither field from it.
+	if !numbersFit {
 		return parsed, nil
 	}
 	parsed.model = requestModel(raw, members)
@@ -219,46 +220,4 @@ func formatEffortJSON(raw []byte) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// jsonNumbersFitFloat64 keeps map[string]any decoding's overflow behavior without
-// allocating maps and strings for every request field.
-func jsonNumbersFitFloat64(body []byte) bool {
-	inString, escaped := false, false
-	for i := 0; i < len(body); {
-		current := body[i]
-		if inString {
-			if escaped {
-				escaped = false
-			} else if current == '\\' {
-				escaped = true
-			} else if current == '"' {
-				inString = false
-			}
-			i++
-			continue
-		}
-		if current == '"' {
-			inString = true
-			i++
-			continue
-		}
-		if current != '-' && (current < '0' || current > '9') {
-			i++
-			continue
-		}
-		start := i
-		for i < len(body) && isJSONNumberByte(body[i]) {
-			i++
-		}
-		if _, err := strconv.ParseFloat(string(body[start:i]), 64); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-func isJSONNumberByte(value byte) bool {
-	return value == '-' || value == '+' || value == '.' || value == 'e' || value == 'E' ||
-		(value >= '0' && value <= '9')
 }

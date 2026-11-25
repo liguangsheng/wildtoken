@@ -41,6 +41,26 @@ var hopByHopResponseHeaders = []string{
 	"content-length",
 }
 
+// readDownstreamBody reads a request body of declared length into one
+// allocation of that size. io.ReadAll grows by a quarter at a time, so a
+// 22 MiB upload allocated 120 MiB on its way in. A body declared over the
+// limit is refused before any of it is read.
+func readDownstreamBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	if r.ContentLength > maxDownstreamBodyBytes {
+		return nil, &http.MaxBytesError{Limit: maxDownstreamBodyBytes}
+	}
+	reader := http.MaxBytesReader(w, r.Body, maxDownstreamBodyBytes)
+	if r.ContentLength <= 0 {
+		// Chunked: the length is known only at the end.
+		return io.ReadAll(reader)
+	}
+	body := make([]byte, r.ContentLength)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
 // upstreamSelector reads an explicit channel hint from the header or query.
 func upstreamSelector(r *http.Request) *string {
 	if value := strings.TrimSpace(r.Header.Get("x-wildtoken-upstream")); value != "" {
@@ -418,7 +438,7 @@ func proxyHandler(state *appstate.State, admin *middleware.DownstreamAuth) http.
 			return
 		}
 
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDownstreamBodyBytes))
+		body, err := readDownstreamBody(w, r)
 		if err != nil {
 			// A body that exceeded the cap is the caller's error; anything else
 			// means the caller went away mid-upload.

@@ -477,7 +477,8 @@ func TestObservationDiscardsAndRecoversFromAnOversizedEventLine(t *testing.T) {
 	measure := func() int32 { return 1 }
 
 	oversized := make([]byte, maxSSEEventBytes+1)
-	for i := range oversized {
+	copy(oversized, "data: ")
+	for i := len("data: "); i < len(oversized); i++ {
 		oversized[i] = 'x'
 	}
 	observation.observeChunk(oversized, measure)
@@ -498,6 +499,45 @@ func TestObservationDiscardsAndRecoversFromAnOversizedEventLine(t *testing.T) {
 	}
 	if !observation.terminalEventSeen {
 		t.Error("the stream did not recover to observe the terminal event")
+	}
+}
+
+// Only data: and event: lines are read, so any other line, a whole JSON body
+// included, passes through without being buffered.
+func TestObservationIgnoresLinesThatCannotMatter(t *testing.T) {
+	measure := func() int32 { return 1 }
+	body := []byte(`{"id":"msg","content":"` + strings.Repeat("x", 1<<20) + `"}`)
+
+	var observation sseObservation
+	for start := 0; start < len(body); start += 32 << 10 {
+		observation.observeChunk(body[start:min(start+32<<10, len(body))], measure)
+		if cap(observation.lineBuf) > 64 {
+			t.Fatalf("buffered %d bytes of a JSON body", cap(observation.lineBuf))
+		}
+	}
+
+	// A data: line split before its colon, or after leading space Unicode
+	// counts, is still read; a comment and an id: line are not.
+	for _, chunks := range [][]string{
+		{"da", "ta: {\"type\":\"message_stop\"}\n\n"},
+		{"\u00a0", "data: {\"type\":\"message_stop\"}\n\n"},
+		{"\xc2", "\xa0data: {\"type\":\"message_stop\"}\n\n"},
+		{"ev", "ent: message_stop\n", "\n"},
+	} {
+		var observation sseObservation
+		for _, chunk := range chunks {
+			observation.observeChunk([]byte(chunk), measure)
+		}
+		if !observation.terminalEventSeen {
+			t.Errorf("%q: the terminal event was not read", chunks)
+		}
+	}
+	for _, line := range []string{": ping", "id: 7", "retry: 100", `{"type":"message_stop"}`} {
+		var observation sseObservation
+		observation.observeChunk([]byte(line+"\n\n"), measure)
+		if observation.terminalEventSeen || len(observation.lineBuf) != 0 {
+			t.Errorf("%q was read", line)
+		}
 	}
 }
 

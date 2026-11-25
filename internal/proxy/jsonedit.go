@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"bytes"
-	"encoding/json"
 	"sort"
 )
 
@@ -15,79 +13,6 @@ import (
 type member struct {
 	name       string
 	start, end int
-}
-
-// skipValue lets the decoder walk past a value, still validating it, without
-// copying it out.
-type skipValue struct{}
-
-func (*skipValue) UnmarshalJSON([]byte) error { return nil }
-
-// objectMembers lists the members of the object body holds, in order and with
-// duplicates, and the offset of its closing brace. ok is false unless body is
-// exactly one JSON object, whitespace aside — what json.Unmarshal accepts.
-//
-// Names are compared decoded, so "model" is model here as it is to every
-// JSON parser upstream.
-func objectMembers(body []byte) (members []member, closing int, ok bool) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return nil, 0, false
-	}
-
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, 0, false
-		}
-		name, isName := token.(string)
-		if !isName {
-			return nil, 0, false
-		}
-		afterName := int(decoder.InputOffset())
-		if err := decoder.Decode(&skipValue{}); err != nil {
-			return nil, 0, false
-		}
-		end := int(decoder.InputOffset())
-
-		start := valueStart(body, afterName, end)
-		if start < 0 {
-			return nil, 0, false
-		}
-		members = append(members, member{name: name, start: start, end: end})
-	}
-
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return nil, 0, false
-	}
-	closing = int(decoder.InputOffset()) - 1
-	for _, b := range body[closing+1:] {
-		if !isJSONSpace(b) {
-			return nil, 0, false
-		}
-	}
-	return members, closing, true
-}
-
-// valueStart skips the colon and padding between a member's name and its
-// value, or returns -1 when they are not there.
-func valueStart(body []byte, from, end int) int {
-	i := from
-	for i < end && isJSONSpace(body[i]) {
-		i++
-	}
-	if i >= end || body[i] != ':' {
-		return -1
-	}
-	i++
-	for i < end && isJSONSpace(body[i]) {
-		i++
-	}
-	return i
-}
-
-func isJSONSpace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 // jsonEdit replaces body[start:end] with text; start == end inserts.
